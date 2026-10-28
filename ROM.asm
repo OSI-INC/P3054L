@@ -10,7 +10,7 @@ const config_key 0x5678 ; Configuration Key
 ; Default values for calibration and configuration.
 
 const def_id     0xAA55 ; Device ID, low nibble 1-E only.
-const def_rf         13 ; Radio Frequency Low Calibration.
+const def_rf          5 ; Radio Frequency Low Calibration.
 const def_fck      0x10 ; Fast Clock Mask
 
 ; CPU Address Map Boundaries. The first 256-byte block is  
@@ -1805,7 +1805,7 @@ main_fck_done:
 
 ; Check to see if the device identifier calibration value has
 ; a valid lower nibble: neither 0xF nor 0x0. If valid, transfer
-; to the device idendtifier memory locations.
+; to the device identifier memory locations.
 
 ld A,(calib_idl)
 sub A,0x00
