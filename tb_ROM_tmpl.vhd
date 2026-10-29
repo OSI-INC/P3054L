@@ -14,17 +14,17 @@ end entity tb;
 architecture test of tb is 
 
     component ROM
-        port (Address : in std_logic_vector(11 downto 0); 
+        port (Address : in std_logic_vector(6 downto 0); 
         OutClock: in std_logic; OutClockEn: in std_logic; 
-        Reset: in std_logic; Q : out std_logic_vector(7 downto 0)
+        Reset: in std_logic; Q : out std_logic_vector(11 downto 0)
     );
     end component;
 
-    signal Address : std_logic_vector(11 downto 0) := (others => '0');
+    signal Address : std_logic_vector(6 downto 0) := (others => '0');
     signal OutClock: std_logic := '0';
     signal OutClockEn: std_logic := '0';
     signal Reset: std_logic := '0';
-    signal Q : std_logic_vector(7 downto 0);
+    signal Q : std_logic_vector(11 downto 0);
 begin
     u1 : ROM
         port map (Address => Address, OutClock => OutClock, OutClockEn => OutClockEn, 
@@ -37,7 +37,7 @@ begin
       Address <= (others => '0') ;
       wait for 100 ns;
       wait until Reset = '0';
-      for i in 0 to 4099 loop
+      for i in 0 to 131 loop
         wait until OutClock'event and OutClock = '1';
         Address <= Address + '1' after 1 ns;
       end loop;

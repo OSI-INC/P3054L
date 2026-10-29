@@ -1,116 +1,7 @@
--- Intraperitoneal Transmitter (IPT, A3054) Firmware, Top-Level Unit
+-- A3054L Long-Life IPT Firmware, Top-Level Unit
 
--- V1.1 [25-MAR-26] Based upon P3041 V3.6. Set up inputs and outputs.
+-- V2.0 [28-OCT-26] Based upon P3054 V1.9. Creating long-life version.
 
--- V1.2 [01-APR-26] Bring in the P3051 ring oscillator implementation: a big ring
--- with no divider creates FCK. Remove the Clock Calibrator process and hard-wire
--- fck_divisor in firmware. Compile for a 31-gate ring, set route priority on all
--- thirty-one gates, then re-compile for fewer gates and ignore warnings. Adapt
--- the P3041 Stimulus Controller for our LED output. In software, we have disabled
--- the P3041 Stimulus Controller for our LED output. In software, we have disabled
--- the Clock Calibration call. Tested and fully functional without any readout of
--- sensors or converters. Compiled size 1206 LUTs.
-
--- V1.3 [02-APR-26] Add I2C interface. Adapt Sensor Controller for the ADS7052.
--- Re-number the control registers 0-31, there are exactly thirty-two right now.
--- We can read ADC HI and LO bytes, as well as I2C byte. Sensor Controller is
--- untested, but I2C communication with TMP117 fully operational.
-
--- V1.4 [09-APR-26] Sensor Controller becomes the ADC Controller. Rename sensor
--- signals. Controller supports one and two left shifts of fourteen-bit data.
--- The ADC control register sets shift and selects the ADC. Amplifier control
--- register turns on and off DC coupling and impedance measurement switch. The 
--- ADC readout runs off FCK with SCK at 5 MHz.
-
--- V1.5 [01-MAY-26] Add readback of amplifier configuration register. Eliminate 
--- support for random stimuli in software. Remove multiplier from software. Now
--- have I2C.asm include file. Transmit signal can be directed to any input, AC
--- or DC, temperature sensor, accelerometer, EEPROM, or synchronizing signal.
--- Simplify LED controller.
-
--- V1.6 [04-JUN-26] Remove shutdown counter from software. Add main loop counter
--- to control 0.5-Hz updates of temperature sensor. Read out temperature sensor
--- just before we initate a new measurement. Add identifier transmission as a
--- transmit current cost reference.
-
--- V1.7 [08-JUN-26] Move all thermometer timing into the interrupt routine. Make
--- sure CPU is in boost when performing ADC calibration, and insert calibration
--- delays. Remove stimulus support, except that on stimulus start, the LED turns
--- on, and on stimulus stop, it turns off. Extend adc data to eighteen bits with
--- zero to four left shifts at end of readout. 
-
--- V1.8 [09-JUN-26] Add four eighteen-bit accumulators for box filters. Code is 14 
--- LUTs and 12 SLICEs too large. Eliminate the X3 and X4 box filters and allow 
--- direct access to adc_data. Code fits. We have accumulators for X1 and X2.
--- Eliminate CRC check of command. We plan to implement later in software. Convert 
--- the command initiate and terminate processes to using the millisecond clock with
--- synchronous reset, which reduces the number of registers used for counting. 
--- Eliminate access to raw ADC data.
-
--- V1.9 [10-JUN-26] Reduce the CPU address from eleven to ten bits. Compress the
--- memory mapy. Restrict user code to 1 KByte and place in CPU range 0x0400 to
--- 0x07FF. In first 1 KByte we have 256 bytes each for control space, stack, user
--- variables and main program variables. The control space is now shadowed by
--- the RAM, so we eliminate some read-back code from the MMU. Restore access to 
--- raw ADC data. Sampling always at 1024 SPS, box filter provides 128, 256, 512,
--- and 1024 SPS at request of Stimulator, any request unequal to these defaulting
--- to 1024 SPS. Tested for AC, believe now working for DC too. 
-
--- V1.10 [11-JUN-26] Instead of four accumulators, use a sample memory made out
--- of our last EBR block, and share a single accumulator to calculate the transmit
--- sample value at transmit time. Size drops from 1250 to 1150 LUTs.
-
--- V1.11 [27-JUN-26] Replace TXA, which we never use, with MCK in the status register.
--- Now we can use MCK as a millisecond timer that works in both boost and slow
--- modes. Expand MMU comments. In software, insist that NVM writes be on page
--- boundaries.
-
--- V1.12 [03-JUL-26] Add shifting back into the Sample Controller. All sensors and
--- converters can be configured in software. Readout and writing to NVM working.
--- Only problem is 30 uA overhead of a 1024 Hz interrupt.
-
--- V1.13 [05-JUL-26] Reduce Sample Memory to four locations 18 bits wide. Route
--- output of Sample Memory to one input of the Sample Accumulator. The other 
--- input comes from the ADC Controller. Upon assertion of ADCRD, the ADC Controller
--- reads a fourteen-bit sample from the ADC selected by the two-bit Sample Address,
--- shifts it in accordance with the Accumulation Shift bits, adds it to the 
--- output of the Sample Memory, and loads the sum back into the same location in
--- sample memory. Eliminate direct readout of the ADC samples. Add ACCRST and 
--- SMWRCPU so we can clear values in the sample memory. Build Sample Controller
--- to direct the ADC Controller to read out the ADCs one after another.
-
--- V1.14 [07-JUL-26] Add sample counters for X1-X4 so the planned Telemetry 
--- Controller can instruct the Sample Controller to skip an ADC or to sample
--- an ADC less frequently than 1024 SPS. Build Telemetry Manager to turn on 
--- FCK and start the launch the Sample Controller at 1024 Hz. Add telemetry
--- time shift generator to ADC Controller. Remove all interrupt bits except 
--- bit 0. Generate int0 with Telemetry Manager. Enable Telemetry Manager with 
--- interrupt mask bit0. Add X4SS for "Input X4 Single Sample" to allow 
--- sampling of chaotic signals without low-pass filtering.
-
--- V1.15 [08-JUL-26] Ring oscillator now software-programmable with eight-bit
--- mask written to location mmu_fck. Fix bug in X4SS implementation.
-
--- V1.16 [09-JUL-26] Calibration now being read from NVM. Can change RF
--- calibration, ring oscillator frequency, and set the device identifier from
--- our Telemetry Manager. Check for bad values of ID and mask. Combine Lon and 
--- Loff into Flash operation. Add and implement software reset operation. New
--- operation code values.
-
--- V1.17 [10-JUL-26] Configuration now being read from NVM. Thoroughly tested.
-
--- V1.18 [13-JUL-26] Activate telemetry protocol immediately after reset.
--- Use CUPISRV instead of df_reg(0) as our interrupt flag on TP1.
-
--- V1.19 [14-JUL-26] Permit sampling of X1-X4 to be disabled with writes to
--- new X1SKIP to X4SKIP flags. Disabling reduces current consumption by about 
--- two microamp.
-
--- V1.20 [16-JUL-26] Efficient use of FCK during sampling. We use a toggle
--- hand-shake to turn on FCK from the Telemetry Manager and turn off FCK
--- from the Sample Controller.
-
--- V1.21 [17-JUL-26] Add soft reset to accelerometer configuration.
 
 library ieee;  
 use ieee.std_logic_1164.all;
@@ -149,17 +40,17 @@ entity main is
 	constant default_frequency_low : integer := 5;
 		
 -- Configuration of OSR8 CPU.
-	constant prog_cntr_len : integer := 12;
-	constant cpu_addr_len : integer := 10;
+	constant mcu_addr_len : integer := 7;
+	constant mcu_instr_len : integer := 12;
 	constant start_pc : integer := 0;
 	constant interrupt_pc : integer := 3;
-	constant ram_addr_len : integer := 10;
+	constant ram_addr_len : integer := 6;
 
 -- Memory Map Constants, sizes and base addresses.
-	constant ctrl_bot : integer := 16#0000#;
-	constant ctrl_top : integer := 16#00FF#;
-	constant ram_bot  : integer := 16#0100#;
-	constant ram_top  : integer := 16#03FF#;
+	constant ram_bot : integer := 16#0000#;
+	constant ram_top : integer := 16#003F#;
+	constant ctrl_bot  : integer := 16#0040#;
+	constant ctrl_top  : integer := 16#007F#;
 	
 -- Memory Map Constants, low nibble addresses in units of bytes. When a location is
 -- a control register shadowed in RAM, we say it is "Write/Readback". When writing to
@@ -303,8 +194,8 @@ architecture behavior of main is
 	signal df_reg : std_logic_vector(3 downto 0);
 
 -- Program Memory Signals
-	signal prog_data : std_logic_vector(7 downto 0); -- ROM Data
-	signal prog_cntr : std_logic_vector(prog_cntr_len-1 downto 0); -- Prog Address
+	signal prog_data : std_logic_vector(mcu_instr_len-1 downto 0); -- ROM Data
+	signal prog_cntr : std_logic_vector(mcu_addr_len-1 downto 0); -- Prog Address
 	
 -- Process Memory Signals
 	signal ram_addr : std_logic_vector(ram_addr_len-1 downto 0); -- RAM Address
@@ -313,7 +204,7 @@ architecture behavior of main is
 	
 -- Central Processing Unit Signals. The syn_keep and nomerge reduce code size slightly.
 	signal cpu_data_out, cpu_data_in : std_logic_vector(7 downto 0); 
-	signal cpu_addr : std_logic_vector(cpu_addr_len-1 downto 0);
+	signal cpu_addr : std_logic_vector(mcu_addr_len-1 downto 0);
 	attribute syn_keep of cpu_addr : signal is true;
 	attribute nomerge of cpu_addr : signal is "";  
 	signal CPUWR, -- Write (Not Read)
@@ -328,35 +219,6 @@ architecture behavior of main is
 	signal int_rst_d, int_rst_s : std_logic_vector(7 downto 0);
 	signal int_period_0 : std_logic_vector(4 downto 0);
 	
--- Byte Receiver
-	signal RPS, -- Radio Frequency Power Synchronized
-		ICMD, -- Initiate Command Reception
-		TCMD, -- Terminate Command Reception
-		RCMD, -- Receive Command
-		RBI, -- Receive Command Byte Initiate
-		RBD, -- Receive Command Byte Done
-		BYTERR, -- Byte Error
-		CRCERR, -- Checksum Error
-		BYTS, -- Command Byte Strobe
-		CBS -- Command Bit Strobe (CBS)
-		: boolean := false; 
-	
--- Command Memory
-	signal cmd_in : std_logic_vector(7 downto 0); -- Command Memory Data In
-	signal cmd_out : std_logic_vector(7 downto 0); -- Command Memory Data Out
-	signal CME, -- Command Memory Empty
-		CMF, -- Command Memory Full
-		CMRST, -- Command Memory Reset
-		CMWR,  -- Command Memory Write
-		CMRD -- Command Memory Read
-		: std_logic; 
-
--- Command Processor
-	signal CPA, -- Command Processor Active
-		CMDRDY, -- Command Ready
-		CPRST -- Command Processor Reset
-		: boolean := false;
-			
 -- Functions and Procedures	
 	function to_std_logic (v: boolean) return std_ulogic is
 	begin if v then return('1'); else return('0'); end if; end function;
@@ -441,20 +303,19 @@ begin
 		Data => ram_in,
 		Q => ram_out);
 
--- The Program Memory is a ROM that holds the CPU program. 
-	Program_Memory : entity ROM port map (
+-- The Instruction Memory is a ROM that holds the CPU program. 
+	Instruction_Memory : entity ROM port map (
 		Address => prog_cntr,
         OutClock => not CK,
         OutClockEn => '1',
         Reset => '0',	
         Q => prog_data);
 
--- The OSR8 processor, configured for this application by its 
--- generic map.
-	CPU : entity OSR8_CPU 
+-- The RMC5, configured for this application by its generic map.
+	CPU : entity RMC5_CPU
 		generic map (
-			prog_cntr_len => prog_cntr_len,
-			cpu_addr_len => cpu_addr_len,
+			addr_len => mcu_addr_len,
+			instr_len => mcu_instr_len,
 			start_pc => start_pc,
 			interrupt_pc => interrupt_pc
 		)
@@ -468,7 +329,6 @@ begin
 			DS => CPUDS,
 			IRQ => CPUIRQ,
 			ISRV => CPUISRV,
-			SIG => CPUSIG,
 			RESET => RESET,
 			CK => CK
 		);
@@ -484,7 +344,6 @@ begin
 		-- By default, don't write to RAM or PROG memories, nor do we read from
 		-- the command memory FIFO.
 		RAMWR <= '0';
-		CMRD <= '0';
 		
 		-- The RAM address we take from the lower bits of the cpu
 		-- address. The RAM data in is always the cpu data out.
@@ -518,22 +377,12 @@ begin
 						-- and clocks, including the 32.768 kHz and 1.024 kHz 
 						-- clocks, which the CPU can use for timing.
 						when mmu_sr => 
-							cpu_data_in(0) <= to_std_logic(CMDRDY); -- Command Ready
-							cpu_data_in(1) <= to_std_logic(RPS);    -- Receive Power
 							cpu_data_in(2) <= MCK;                  -- Millisecond Clock
 							cpu_data_in(3) <= to_std_logic(TXA);    -- Transmit Active
-							cpu_data_in(4) <= to_std_logic(CPA);    -- Command Processor Active 
 							cpu_data_in(5) <= to_std_logic(SCBSY);  -- Sample Controller Busy
-							cpu_data_in(6) <= CME;                  -- Command Memory Empty
 							cpu_data_in(7) <= RCK;                  -- Reference Clock
 							
 						-- The location from which the CPU reads command bytes out
-						-- of the command FIFO. Includes a strobe that increments the
-						-- FIFO after the read.
-						when mmu_cmp =>
-							cpu_data_in <= cmd_out;
-							CMRD <= to_std_logic(CPUDS);
-							
 						-- The location from which the CPU reads the byte most 
 						-- recently received from the I2C interface.
 						when mmu_i2cMR => cpu_data_in <= i2c_in;
@@ -581,7 +430,6 @@ begin
 			int_mask <= (others => '0');
 			int_rst <= (others => '1');
 			int_period_0 <= (others => '0');
-			CPRST <= true;
 			frequency_low <= default_frequency_low;
 			fck_mask <= default_fck_mask;
 			SDA <= 'Z';
@@ -600,7 +448,6 @@ begin
 		-- and transmit activity. Some signals we assert only for one CK period, and 
 		-- these we assert as false by default.
 		elsif falling_edge(CK) then
-			CPRST <= false;
 			SWRST <= false;
 			TXI <= false;
 			ACCRST <= '0';
@@ -681,10 +528,6 @@ begin
 						-- The diagnostic flag register. These bits can be routed
 						-- to test points for diagnostics with an oscilloscope.
 						when mmu_dfr  => df_reg <= cpu_data_out(3 downto 0);
-						
-						-- The command processor reset bit: clears the command
-						-- FIFO and returns the command processor to its rest state.
-						when mmu_cpr  => CPRST <= true;
 						
 						-- The fast clock mask has only one bit out of eight set,
 						-- and this bit selects which gate in the ring will be
@@ -1452,7 +1295,7 @@ begin
 -- With XEN we enable the VCO. We assert XEN while the Message Transmitter is active,
 -- provided that the Command Processor is not receiving a command. We also turn on
 -- the VCO when the CPU asserts Transmit Warmup (TXWP). 
-	XEN <= to_std_logic((TXA or TXWP) and (CMDRDY or (not CPA)));
+	XEN <= to_std_logic(TXA or TXWP);
 			
 -- The Frequency Modulation process takes the transmit bit values provided by
 -- the Message Transmitter, turns them into a sequence of rising and falling
@@ -1490,360 +1333,6 @@ begin
 				FHI <= false;
 			end if;
 		end if;
-	end process;
-
--- The Receive Power signal must be synchronized with the RCK clock.
-	Synchronize_RP: process (RESET, RCK) is 
-	begin
-		if RESET = '1' then
-			RPS <= false;
-		elsif rising_edge(RCK) then
-			RPS <= (RP = '1');
-		end if;
-	end process;
-	
--- We detect a long enough burst of command power to initiate
--- command reception, and set the ICMD signal.
-	Initiate_Command: process (RESET, RCK) is 
-		constant endcount : integer := 2;
-		variable counter : integer range 0 to 3;
-	begin
-		if (not RPS) then
-			ICMD <= false;
-			counter := 0;
-		elsif rising_edge(MCK) then
-			if (counter = endcount) then 
-				counter := endcount;
-				ICMD <= true;
-			else 
-				counter := counter + 1;
-				ICMD <= false;
-			end if;
-		end if;
-	end process;
-	
--- We detect a long enough period without command power to 
--- terminate command reception, and set the TCMD signal.
-	Terminate_Command: process (RESET, RCK) is 
-		constant endcount : integer := 7;
-		variable counter : integer range 0 to 7;
-	begin
-		if RPS then
-			counter := 0;
-			TCMD <= false;
-		elsif rising_edge(MCK) then
-			if (counter = endcount) then 
-				counter := endcount;
-				TCMD <= true;
-			else 
-				counter := counter + 1;
-				TCMD <= false;
-			end if;
-		end if;
-	end process;
-	
--- The Receive Command (RCMD) signal indicates that a command is being 
--- received. We set RCMD when Initiate Command (ICMD) occurs, and we clear
--- RCMD when Terminate Command (TCMD) occurs.
-	Receive_Command: process (RESET, RCK) is
-	begin
-		if RESET = '1' then
-			RCMD <= false;
-		elsif rising_edge(RCK) then
-			if not RCMD then
-				RCMD <= ICMD;
-			else 
-				RCMD <= not TCMD;
-			end if;
-		end if;
-	end process;
-
--- We watch for a start bit and receive serial bytes when instructed
--- to do so by the Command Processor with the RBI signal.
-	Byte_Receiver: process (RESET, RCK) is
-		variable state, next_state : integer range 0 to 63;
-		variable no_stop_bit : boolean;
-	begin
-		if RESET = '1' then
-			state := 0;
-		elsif rising_edge(RCK) then
-		
-			-- Idle state, waiting for Receive Byte Initiate.
-			if (state = 0) then
-				if RBI and (not RPS) then 
-					next_state := 1;
-				else 
-					next_state := 0;
-				end if;
-			end if;
-			
-			-- Wait for a start bit. If we wait long enough, we will see the 
-			-- termination signal, in which case we abort and wait for not RPI.
-			-- We clear no stop bit variable, which clears the global BYTERR 
-			-- signal.
-			if (state = 1) then
-				if TCMD then 
-					next_state := 63; 
-				else 
-					if RPS then 
-						next_state := 2;
-					else 
-						next_state := 1; 
-					end if;
-				end if;
-				no_stop_bit := false;
-			end if;
-			BYTERR <= no_stop_bit;
-			
-			-- Once we have a start bit, we proceed through the eight bits of
-			-- a command byte, each bit taking four states. The first bit occurs
-			-- at state 7 and the stop bit at state 39.
-			if (state >= 2) and (state <= 38) then 
-				next_state := state + 1; 
-			end if;
-			
-			-- If the stop bit is present, we go to our end state. If it's missing,
-			-- we go to our byte error state. The stop bit is zero, so RPS should 
-			-- at this point be false.
-			if (state = 39) then
-				if not RPS then 
-					next_state := 63;
-				else 
-					next_state := 62;
-				end if;
-			end if;
-			
-			-- Here we deal with unused states by directing them towards the byte
-			-- error state.
-			if (state > 39) and (state < 62) then 
-				next_state := 62; 
-			end if;
-			
-			-- In the byte error state, we set the "no stop bit" flag, which asserts the 
-			-- global BYTERR signal. We will not reset this flag until the Byte Receiver
-			-- starts a new byte reception. This flag tells the Command Processor to ignore
-			-- the entire command. We wait in the byte error state until RBI is unasserted. 
-			-- Because we do not assert RBD, the un-assertion of RBI will occur only when
-			-- the Command Receiver encounters a Terminate Command signal.
-			if (state = 62) then
-				if not RBI then 
-					next_state := 0;
-				else 
-					next_state := 62;
-				end if;
-				no_stop_bit := true;
-			end if;
-			
-			-- In the end state, we assert Receive Byte Done and we wait for the command
-			-- processor to un-assert Receive Byte Initiate. When we see not RBI, we return
-			-- to the idle state and unassert RBD. When we see Terminate Command (TCMD) we
-			-- unassert RBD.
-			if (state = 63) then 
-				if not RBI then 
-					next_state := 0; 
-				else 
-					next_state := 63; 
-				end if;
-			end if;
-			RBD <= (state = 63) and (not TCMD);
-					
-			-- The eight bits of the command are set every four states during
-			-- the command reception.
-			for i in 0 to 7 loop
-				if (state = 35 - i * 4) then 
-					if RPS then 
-						cmd_in(i) <= '1'; 
-					else 
-						cmd_in(i) <= '0'; 
-					end if;
-				else 
-					cmd_in(i) <= cmd_in(i); 
-				end if;
-			end loop;
-			
-			-- We assert Command Bit Strobe (CBS) one RCK period before the best moment
-			-- to sample each bit value.
-			if (state = 34) or (state = 30) or (state = 26) or (state = 22) 
-				or (state = 18) or (state = 14) or (state = 10) or (state = 6) then
-				CBS <= true;
-			else 
-				CBS <= false;
-			end if;
-			
-			-- The Byte Strobe signal indicates that we have a start bit and is 
-			-- useful as a test point trigger. It provides a pulse of two RCK 
-			-- periods.
-			BYTS <= (state = 2) or (state = 3);
-			
-			-- Assert the new state.
-			state := next_state;
-		end if;
-	end process;
-
--- This process runs all the bits of a command through a sixteen-bit linear 
--- feedback shift register, with local name "crc" for "cyclic redundancy check". 
--- We preset crc to all ones. The final sixteen bits of every command are chosen 
--- so that they reset the crc register to all zeros. If crc is not zero at the 
--- end of a command, there was some error during reception. We use the Command
--- Bit Strobe (CBS) signal to clock crc, because CBS is asserted only when a command 
--- data bit is received, not when we receive a start or stop bit.
-	Error_Check : process (RESET, RCK) is
-		variable crc, next_crc : std_logic_vector(15 downto 0);
-	begin
-		if RESET = '1' then
-			crc := (others => '1');
-		elsif rising_edge(RCK) then
-			if ICMD then
-				-- When a new command transmission starts, we preload the cyclic redundancy
-				-- check register to all ones.
-				crc := (others => '1');
-			else
-				-- We use Command Bit Strobe (CBS) to clock each command bit into the CRC.
-				-- The transmitter calculates the checksum with zeros in the last
-				-- sixteen bits, reverses the order of these checksum bits, and sends
-				-- them as the last two bytes of the actual transmission, instead of the
-				-- zeros it used when it calculated its own checksum. These last sixteen
-				-- bits, thus obtained, will reset the receiver CRC to zero, provided there
-				-- has been no corruption of the data on the way.
-				if CBS then
-					for i in 0 to 9 loop next_crc(i) := crc(i+1); end loop;
-					next_crc(10) := crc(11) xor crc(0);
-					next_crc(11) := crc(12);
-					next_crc(12) := crc(13) xor crc(0);
-					next_crc(13) := crc(14) xor crc(0);
-					next_crc(14) := crc(15);
-					next_crc(15) := to_std_logic(RPS) xor crc(0);	
-					crc := next_crc;
-				end if;		
-			end if;
-		end if;
-		
-		-- The CRCERR flag tells us when the CRC is not zero. It will be zero when it
-		-- has been reset by the two bytes of a correct checksum.
-		CRCERR <= (crc /= "0000000000000000");
-	end process;
-
--- Command Memory
-	Command_Memory : entity CMD_FIFO port map (
-		Reset => CMRST, 
-		RPReset => '0',
-		WrClock => not RCK,
-		WrEn => CMWR,
-		Data => cmd_in,
-		RdClock => not CK,
-		RdEn => CMRD,
-		AlmostEmpty => CME,
-		Full => CMF,
-		Q => cmd_out);
-	
--- The Command Processor detects Inititiate Command (ICMD) and activates the Byte Receiver. 
--- It stores command bytes in the Command Memory until it detects Terminate Command (TCMD). If
--- the Error Check reports no error, the Command Processor asserts Command Ready (CMDRDY) and
--- waits until the CPU asserts Command Processor Reset (CPRST) before returning to its rest
--- state. When the command is ready, the CPU can read all bytes out of the Command Memory. 
--- The Command Processor runs on the reference clock, which is 32.768 kHz, and proceeds to a 
--- new state every clock cycle. 
-	Command_Processor: process (RESET, RCK) is
-		
-		-- General-purpose state names for the Command Processor
-		constant idle_s : integer := 0;
-		constant receive_cmd_s : integer := 1;
-		constant store_cmd_s : integer := 2;
-		constant check_fifo_s : integer := 3;
-		constant check_cmd_s : integer := 4;
-		constant complete_s : integer := 5;
-		
-		-- Variables and constants for the Command Processor
-		variable state, next_state : integer range 0 to 7;
-		
-	begin
-		-- We reset to the idle state on global RESET or the Command Processor
-		-- Reset (CPRST).
-		if (RESET = '1') or CPRST then
-			state := idle_s;
-			CMRST <= '1';
-			
-		-- The Command Processor state machine runs off RCK, which allows it to
-		-- work with the Byte Receiver.
-		elsif rising_edge(RCK) then
-			-- Default next state and reset value.
-			next_state := idle_s;
-			CMRST <= '0';
-			RBI <= false;
-			CMWR <= '0';
-		
-			-- Idle State.
-			if (state = idle_s) then
-				if ICMD then 
-					next_state := receive_cmd_s; 
-				else 
-					next_state := idle_s;
-				end if;
-				CMRST <= '1';
-			end if;
-			
-			-- Receive a command byte. We assert RBI and wait for RBD. If we see 
-			-- Terminate Command (TCMD), we move on. Note that the Byte Receiver 
-			-- aborts on TCMD also.
-			if (state = receive_cmd_s) then 
-				if TCMD then 
-					next_state := check_cmd_s;
-				else 
-					if RBD then 
-						next_state := store_cmd_s;
-					else 
-						next_state := receive_cmd_s;
-					end if;
-				end if;
-				RBI <= true;
-			end if;
-			
-			-- Store the new command byte in the command memory. We assert Command
-			-- Memory Write (CMWR) for one clock cycle.
-			if (state = store_cmd_s) then 
-				next_state := check_fifo_s;
-				CMWR <= '1';
-			end if;
-			
-			-- Check if the Command Memory is full. If so, abort. Otherwise, we 
-			-- wait for RBD to be unasserted before receiving the next command byte.
-			if (state = check_fifo_s) then
-				if (CMF = '1') then
-					next_state := idle_s;
-				elsif not RBD then
-					next_state := receive_cmd_s;
-				else
-					next_state := check_fifo_s;
-				end if;
-			end if;		
-			
-			-- There are two possible sources of error: a failure in the cyclic redundancy
-			-- check (CRCERR) or an error in the structure of a command byte (BYTERR). If
-			-- either is asserted, we go back to idle and ignore the command.
-			if (state = check_cmd_s) then
-				if BYTERR or CRCERR then 
-					next_state := idle_s;
-				else 
-					next_state := complete_s;
-				end if;
-			end if;
-
-			-- We have a completed command in memory, waiting for the CPU to read it out.
-			-- We assert CMDRDY and wait until the CPU asserts CPRST. The command processor
-			-- will ignore any further command transmission.
-			if (state = complete_s) then
-				next_state := complete_s;
-			end if;
-			
-			-- Advance the state variable.
-			state := next_state;
-		end if;
-		
-		-- Command Ready tells the CPU that a command is available.
-		CMDRDY <= (state = complete_s);
-			
-		-- Command Processor Active is true whenever the state is not idle.
-		CPA <= (state /= idle_s);
 	end process;
 	
 -- Test Point appears on P1-7.
