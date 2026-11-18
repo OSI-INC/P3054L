@@ -14,67 +14,31 @@ end entity tb;
 architecture test of tb is 
 
     component SMRAM
-        port (Clock: in std_logic; ClockEn: in std_logic; 
-        Reset: in std_logic; WE: in std_logic; 
-        Address : in std_logic_vector(1 downto 0); 
-        Data : in std_logic_vector(17 downto 0); 
+        port (Address : in std_logic_vector(1 downto 0); 
+        Data : in std_logic_vector(17 downto 0); Clock: in std_logic; 
+        WE: in std_logic; ClockEn: in std_logic; 
         Q : out std_logic_vector(17 downto 0)
     );
     end component;
 
-    signal Clock: std_logic := '0';
-    signal ClockEn: std_logic := '0';
-    signal Reset: std_logic := '0';
-    signal WE: std_logic := '0';
     signal Address : std_logic_vector(1 downto 0) := (others => '0');
     signal Data : std_logic_vector(17 downto 0) := (others => '0');
+    signal Clock: std_logic := '0';
+    signal WE: std_logic := '0';
+    signal ClockEn: std_logic := '0';
     signal Q : std_logic_vector(17 downto 0);
 begin
     u1 : SMRAM
-        port map (Clock => Clock, ClockEn => ClockEn, Reset => Reset, WE => WE, 
-            Address => Address, Data => Data, Q => Q
+        port map (Address => Address, Data => Data, Clock => Clock, WE => WE, 
+            ClockEn => ClockEn, Q => Q
         );
-
-    Clock <= not Clock after 5.00 ns;
-
-    process
-
-    begin
-      ClockEn <= '0' ;
-      wait for 100 ns;
-      wait until Reset = '0';
-      ClockEn <= '1' ;
-      wait;
-    end process;
-
-    process
-
-    begin
-      Reset <= '1' ;
-      wait for 100 ns;
-      Reset <= '0' ;
-      wait;
-    end process;
-
-    process
-
-    begin
-      WE <= '0' ;
-      wait until Reset = '0';
-      for i in 0 to 7 loop
-        wait until Clock'event and Clock = '1';
-        WE <= '1' after 1 ns;
-      end loop;
-      WE <= '0' ;
-      wait;
-    end process;
 
     process
 
     begin
       Address <= (others => '0') ;
       wait for 100 ns;
-      wait until Reset = '0';
+      wait for 10 ns;
       for i in 0 to 14 loop
         wait until Clock'event and Clock = '1';
         Address <= Address + '1' after 1 ns;
@@ -87,11 +51,36 @@ begin
     begin
       Data <= (others => '0') ;
       wait for 100 ns;
-      wait until Reset = '0';
+      wait for 10 ns;
       for i in 0 to 7 loop
         wait until Clock'event and Clock = '1';
         Data <= Data + '1' after 1 ns;
       end loop;
+      wait;
+    end process;
+
+    Clock <= not Clock after 5.00 ns;
+
+    process
+
+    begin
+      WE <= '0' ;
+      wait for 10 ns;
+      for i in 0 to 7 loop
+        wait until Clock'event and Clock = '1';
+        WE <= '1' after 1 ns;
+      end loop;
+      WE <= '0' ;
+      wait;
+    end process;
+
+    process
+
+    begin
+      ClockEn <= '0' ;
+      wait for 100 ns;
+      wait for 10 ns;
+      ClockEn <= '1' ;
       wait;
     end process;
 

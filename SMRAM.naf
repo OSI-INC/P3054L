@@ -1,7 +1,3 @@
-Clock  i
-ClockEn  i
-Reset  i
-WE  i
 Address[1]  i
 Address[0]  i
 Data[17]  i
@@ -22,6 +18,9 @@ Data[3]  i
 Data[2]  i
 Data[1]  i
 Data[0]  i
+Clock  i
+WE  i
+ClockEn  i
 Q[17]  o
 Q[16]  o
 Q[15]  o

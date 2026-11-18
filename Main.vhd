@@ -1,6 +1,7 @@
 -- A3054L Long-Life IPT Firmware, Top-Level Unit
 
--- V2.0 [28-OCT-26] Based upon P3054 V1.9. Creating long-life version.
+-- V2.0 [18-NOV-26] Based upon P3054 V1.9. Creating long-life version. Remove
+-- all EBR use, remove OSR8, interrupt timer, memory management unit. 
 
 
 library ieee;  
@@ -38,56 +39,6 @@ entity main is
 	constant tx_channel_default : integer := 1;
 	constant frequency_step : integer := 1; 
 	constant default_frequency_low : integer := 5;
-		
--- Configuration of OSR8 CPU.
-	constant mcu_addr_len : integer := 7;
-	constant mcu_instr_len : integer := 12;
-	constant start_pc : integer := 0;
-	constant interrupt_pc : integer := 3;
-	constant ram_addr_len : integer := 6;
-
--- Memory Map Constants, sizes and base addresses.
-	constant ram_bot : integer := 16#0000#;
-	constant ram_top : integer := 16#003F#;
-	constant ctrl_bot  : integer := 16#0040#;
-	constant ctrl_top  : integer := 16#007F#;
-	
--- Memory Map Constants, low nibble addresses in units of bytes. When a location is
--- a control register shadowed in RAM, we say it is "Write/Readback". When writing to
--- a location initiates a process, we say it is "Write". When a location can be read
--- but not written, we say it is "Read".
-	constant mmu_irqb  : integer := 16#00#; -- Interrupt Request Bits (Read)
-	constant mmu_imsk  : integer := 16#01#; -- Interrupt Mask Bits (Write/Readback)
-	constant mmu_irst  : integer := 16#02#; -- Interrupt Reset Bits (Write)
-	constant mmu_acfg  : integer := 16#03#; -- Amplifier Configuration (Write/Readback)
-	constant mmu_led   : integer := 16#04#; -- Lamp Switch (Write/Readback)
-	constant mmu_rst   : integer := 16#05#; -- Software Reset (Write)
-	constant mmu_xhb   : integer := 16#06#; -- Transmit HI Byte (Write/Readback)
-	constant mmu_xlb   : integer := 16#07#; -- Transmit LO Byte (Write/Readback)
-	constant mmu_xch   : integer := 16#08#; -- Transmit Channel Number (Write/Readback)
-	constant mmu_xcr   : integer := 16#09#; -- Transmit Control (Write)
-	constant mmu_rfc   : integer := 16#0A#; -- Radio Frequency Calibration (Write/Readback)	
-	constant mmu_ccr   : integer := 16#0B#; -- Clock Control (Write/Readback)
-	constant mmu_dfr   : integer := 16#0C#; -- Diagnostic Flags (Write/Readback)
-	constant mmu_sr    : integer := 16#0D#; -- Status Register (Read)
-	constant mmu_cmp   : integer := 16#0E#; -- Command Memory Portal (Read)
-	constant mmu_cpr   : integer := 16#0F#; -- Command Processor Reset (Write)
-	constant mmu_fck   : integer := 16#10#; -- Fast Clock Mask (Write/Readback)
-	constant mmu_i0p   : integer := 16#11#; -- Interrupt Zero Period (Write/Readback)
-	constant mmu_i2c00 : integer := 16#12#; -- i2c SDA=0 SCL=0 (Write/Readback)
-	constant mmu_i2c01 : integer := 16#13#; -- i2c SDA=0 SCL=1 (Write/Readback)
-	constant mmu_i2cA0 : integer := 16#14#; -- i2c SDA=A SCL=0 (Write/Readback)
-	constant mmu_i2cA1 : integer := 16#15#; -- i2c SDA=A SCL=1 (Write/Readback)
-	constant mmu_i2cZ0 : integer := 16#16#; -- i2c SDA=Z SCL=0 (Write/Readback)
-	constant mmu_i2cZ1 : integer := 16#17#; -- i2c SDA=Z SCL=1 (Write/Readback)
-	constant mmu_i2cMR : integer := 16#18#; -- i2C Most Recent Eight Bits (Read)
-	constant mmu_smcr  : integer := 16#19#; -- Sample Control (Write/Readback)
-	constant mmu_x1cfg : integer := 16#1A#; -- X1 Configuration (Write/Readback)
-	constant mmu_x2cfg : integer := 16#1B#; -- X2 Configuration (Write/Readback)
-	constant mmu_x3cfg : integer := 16#1C#; -- X3 Configuration (Write/Readback)
-	constant mmu_x4cfg : integer := 16#1D#; -- X4 Configuration (Write/Readback)
-	constant mmu_smemh : integer := 16#1E#; -- Sample HI Byte (Read)
-	constant mmu_smeml : integer := 16#1F#; -- Sample LO Byte (Read)
 	
 -- Sample and Accumulate Constants
 	constant x1_sel : std_logic_vector(1 downto 0) := "00";
@@ -190,35 +141,6 @@ architecture behavior of main is
 -- I2C Bus Controller
 	signal i2c_in : std_logic_vector(7 downto 0); -- I2C Serial Byte
 	
--- Diagnostic Flag Register
-	signal df_reg : std_logic_vector(3 downto 0);
-
--- Program Memory Signals
-	signal prog_data : std_logic_vector(mcu_instr_len-1 downto 0); -- ROM Data
-	signal prog_cntr : std_logic_vector(mcu_addr_len-1 downto 0); -- Prog Address
-	
--- Process Memory Signals
-	signal ram_addr : std_logic_vector(ram_addr_len-1 downto 0); -- RAM Address
-	signal ram_out, ram_in : std_logic_vector(7 downto 0); -- RAM Data In and Out
-	signal RAMWR : std_logic; -- Command Memory Write
-	
--- Central Processing Unit Signals. The syn_keep and nomerge reduce code size slightly.
-	signal cpu_data_out, cpu_data_in : std_logic_vector(7 downto 0); 
-	signal cpu_addr : std_logic_vector(mcu_addr_len-1 downto 0);
-	attribute syn_keep of cpu_addr : signal is true;
-	attribute nomerge of cpu_addr : signal is "";  
-	signal CPUWR, -- Write (Not Read)
-		CPUDS, -- Data Strobe
-		CPUIRQ, -- Interrupt Request
-		CPUISRV -- Interrupt Service
-		: boolean; 
-	signal CPUSIG : std_logic_vector(3 downto 0); -- Signals for debugging
-
--- Interrupt Handler signals.
-	signal int_mask, int_bits, int_rst : std_logic_vector(7 downto 0);
-	signal int_rst_d, int_rst_s : std_logic_vector(7 downto 0);
-	signal int_period_0 : std_logic_vector(4 downto 0);
-	
 -- Functions and Procedures	
 	function to_std_logic (v: boolean) return std_ulogic is
 	begin if v then return('1'); else return('0'); end if; end function;
@@ -266,7 +188,7 @@ begin
 
 -- The Fast Clock process produces FCK when one of several flags are asserted.
 -- The ring oscillator should be calibrated so that it produces FCK of 10 MHz.
-	FCKEN <= to_std_logic(ENFCKCPU or ENFCKTM or KEEPFCK or CPUISRV);
+	FCKEN <= to_std_logic(ENFCKTM);
 	Fast_Clock: entity ring_oscillator 
 		generic map (
 			num_gates => fck_num_gates,
@@ -292,487 +214,7 @@ begin
 			end if;
 		end if;	
 	end process;
-		
--- The Process Memory is the RAM available to the code executing on the CPU.
-	Process_Memory : entity RAM port map (
-		Clock => not CK,
-		ClockEn => '1',
-        Reset => '0',
-		WE => RAMWR,
-		Address => ram_addr, 
-		Data => ram_in,
-		Q => ram_out);
-
--- The Instruction Memory is a ROM that holds the CPU program. 
-	Instruction_Memory : entity ROM port map (
-		Address => prog_cntr,
-        OutClock => not CK,
-        OutClockEn => '1',
-        Reset => '0',	
-        Q => prog_data);
-
--- The RMC5, configured for this application by its generic map.
-	CPU : entity RMC5_CPU
-		generic map (
-			addr_len => mcu_addr_len,
-			instr_len => mcu_instr_len,
-			start_pc => start_pc,
-			interrupt_pc => interrupt_pc
-		)
-		port map (
-			prog_data => prog_data,
-			prog_cntr => prog_cntr,
-			cpu_data_out => cpu_data_out,
-			cpu_data_in => cpu_data_in,
-			cpu_addr => cpu_addr,
-			WR => CPUWR,
-			DS => CPUDS,
-			IRQ => CPUIRQ,
-			ISRV => CPUISRV,
-			RESET => RESET,
-			CK => CK
-		);
-		
--- The Memory Manager maps eight-bit read and write access to the Sensor 
--- Controller, Sample Transmitter, Random Access Memory, and Interrupt 
--- Handler. Byte ordering is big-endian (most significant byte at lower 
--- address). 
-	MMU : process (all) is
-		variable all_bits : integer range 0 to 2048;
-		variable bottom_bits : integer range 0 to 31;
-	begin		
-		-- By default, don't write to RAM or PROG memories, nor do we read from
-		-- the command memory FIFO.
-		RAMWR <= '0';
-		
-		-- The RAM address we take from the lower bits of the cpu
-		-- address. The RAM data in is always the cpu data out.
-		ram_in <= cpu_data_out;
-		ram_addr <= cpu_addr(ram_addr_len-1 downto 0);
-		
-		-- These signals develop after the CPU asserts a new address
-		-- along with CPU Write. They will be ready before the falling 
-		-- edge of the CPU clock.
-		all_bits := to_integer(unsigned(cpu_addr));
-		bottom_bits := to_integer(unsigned(cpu_addr(5 downto 0)));
-		
-		-- Combinatorial memory map, which serves all access except 
-		-- for writing to control registers. We have the control
-		-- space reads, which are either supplied by registers or
-		-- by shadow locations in RAM. We have the RAM itself, and
-		-- the program memory as well.
-		cpu_data_in <= (others => '0');
-		case all_bits is
-			when ctrl_bot to ctrl_top =>
-				if not CPUWR then 
-					case bottom_bits is
-					
-						-- The interrupt request bits, used by the CPU interrupt
-						-- routine, of which there can by only one, to determine
-						-- which of the interrupt sources requires servicing.						
-						when mmu_irqb => cpu_data_in <= int_bits;
-						
-						-- The status register, which gives access to an array of
-						-- flags that signal the state of the peripheral logic.
-						-- and clocks, including the 32.768 kHz and 1.024 kHz 
-						-- clocks, which the CPU can use for timing.
-						when mmu_sr => 
-							cpu_data_in(2) <= MCK;                  -- Millisecond Clock
-							cpu_data_in(3) <= to_std_logic(TXA);    -- Transmit Active
-							cpu_data_in(5) <= to_std_logic(SCBSY);  -- Sample Controller Busy
-							cpu_data_in(7) <= RCK;                  -- Reference Clock
-							
-						-- The location from which the CPU reads command bytes out
-						-- The location from which the CPU reads the byte most 
-						-- recently received from the I2C interface.
-						when mmu_i2cMR => cpu_data_in <= i2c_in;
-						
-						-- The two locations that provide the output of the sample 
-						-- memory, which holds accumulated samples. We read the
-						-- top sixteen bits of its eighteen-bit output.
-						when mmu_smemh => cpu_data_in <= smem_data(17 downto 10);							
-						when mmu_smeml => cpu_data_in <= smem_data(9 downto 2);
-						
-						-- Whenever we read any other location, we get the value 
-						-- previously written to the shadow RAM.
-						when others => cpu_data_in <= ram_out;
-					end case;
-				else 
-					-- When we write to any control space register, record the 
-					-- written value in the shadow RAM.
-					RAMWR <= to_std_logic(CPUDS);
-				end if;
-			when ram_bot to ram_top => 
-				-- The variable and stack RAM space, writing and reading.
-				if not CPUWR then
-					cpu_data_in <= ram_out;
-				else
-					RAMWR <= to_std_logic(CPUDS);
-				end if;
-			when others =>
-				null;
-		end case;
-		
-		-- Here is the memory map for control register write access. We use RESET 
-		-- to clear some registers and signals, but not all. We do not clear the
-		-- software reset signal, SWRST, on RESET, since we want SWRST to assert 
-		-- RESET for one CK period. After a reset, the cpu address will not select 
-		-- the SWRST location, so SWRST will be cleared on the next falling edge 
-		-- of CK. All writes to control space are shadowed by RAM locations so that
-		-- we can be sure to read them back.
-		if (RESET = '1') then
-			TXI <= false;
-			TXWP <= false;
-			ENFCKCPU <= false;
-			BOOST <= false;
-			tx_channel <= tx_channel_default;
-			df_reg <= (others => '0');
-			int_mask <= (others => '0');
-			int_rst <= (others => '1');
-			int_period_0 <= (others => '0');
-			frequency_low <= default_frequency_low;
-			fck_mask <= default_fck_mask;
-			SDA <= 'Z';
-			SCL <= '1';
-			MSR <= '0';
-			DC <= '0';
-			ACCRST <= '1';
-			SMWRCPU	<= '1';
-			X1SKIP <= false;
-			X2SKIP <= false;
-			X3SKIP <= false;
-			X4SKIP <= false;
-			X4SS <= false;
 			
-		-- We use the falling edge of RCK to write to registers and to initiate sensor 
-		-- and transmit activity. Some signals we assert only for one CK period, and 
-		-- these we assert as false by default.
-		elsif falling_edge(CK) then
-			SWRST <= false;
-			TXI <= false;
-			ACCRST <= '0';
-			SMWRCPU <= '0';
-			int_rst <= (others => '0');
-			if CPUDS and CPUWR then 
-				if (all_bits >= ctrl_bot) and (all_bits <= ctrl_top) then
-					case bottom_bits is
-						-- The Amplifier Configuration register selects between
-						-- AC and DC coupling for the unipolar inputs with bit
-						-- zero. With bit one it activates the impedance 
-						-- measurement switch, which displaces the ground
-						-- potential of unipolar and bipolar inputs so as
-						-- to introduce a step downwards in the unipolar 
-						-- inputs, the size of which depends upon the ratio
-						-- of the electrode impedance to the amplifier input
-						-- impedance.
-						when mmu_acfg => 
-							DC <= cpu_data_out(0);
-							MSR <= cpu_data_out(1);
-						
-						-- The two locations in which the CPU places the sixteen
-						-- telemetry sample bits that will be transmitted after the
-						-- next write to the transmission control register.
-						when mmu_xlb  => xmit_bits(7 downto 0) <= cpu_data_out;
-						when mmu_xhb  => xmit_bits(15 downto 8) <= cpu_data_out;
-						
-						-- The telemetry channel number for the next transmission.
-						when mmu_xch  => tx_channel <= to_integer(unsigned(cpu_data_out));
-						
-						-- The telemetry control register. The TXI initiates a transmission,
-						-- while TXWP turns on the VCO to warm it up before it transmits, 
-						-- which is necessary if the VCO has been dormant for more than 
-						-- 20 ms. We must turn off the warm-up by writing a zero to TXWP
-						-- after a warm-up of no more than 20 ms so we do not collide with
-						-- other transmitters.
-						when mmu_xcr  => 
-							TXI <= (cpu_data_out(0) = '1');
-							TXWP <= (cpu_data_out(1) = '1');
-							
-						-- The frequency calibration of the VCO. We write the VCO control
-						-- five-bit DAC value that sets the frequency of a transmit zero.
-						when mmu_rfc  => frequency_low <= to_integer(unsigned(cpu_data_out));
-						
-						-- The interrupt mask. Bits set to one enable their corresponding
-						-- interrupt request bits and any peripheral machines that generate
-						-- interrupts.
-						when mmu_imsk => int_mask <= cpu_data_out;
-						
-						-- The interrupt-0 period. In this case we set a four-bit period
-						-- between 0 and 31 to indicate the transmit interrupt period in
-						-- multiples of 1/1024 s. When the period is zero, the interrupt
-						-- will take place every 32 periods, or at 32 Hz.
-						when mmu_i0p  => int_period_0 <= cpu_data_out(4 downto 0);
-
-						-- The interrupt reset register. Bits set to one reset their
-						-- corresponding interrupt request bits, signalling that the
-						-- interrupt has been serviced.
-						when mmu_irst => int_rst <= cpu_data_out;
-						
-						-- Turn on the indicator lamp.
-						when mmu_led  => LED <= cpu_data_out(0);
-						
-						-- A strobe that reboots the firmware and CPU.
-						when mmu_rst  => SWRST <= (cpu_data_out(0) = '1');
-						
-						-- Control bits to turn on the fast clock, which in turn
-						-- produces the transmit clock, and to move the CPU into
-						-- boost mode. These bits are in addition to the automatic
-						-- enable of the fast clock and move into boost that is 
-						-- performed by the Boost Controller when it sees the
-						-- CPU's interrupt service flag has been set by the CPU
-						-- to indicate that it is servicing an interrupt.
-						when mmu_ccr  => 
-							ENFCKCPU <= (cpu_data_out(0) = '1');
-							BOOST <= (cpu_data_out(1) = '1');
-							
-						-- The diagnostic flag register. These bits can be routed
-						-- to test points for diagnostics with an oscilloscope.
-						when mmu_dfr  => df_reg <= cpu_data_out(3 downto 0);
-						
-						-- The fast clock mask has only one bit out of eight set,
-						-- and this bit selects which gate in the ring will be
-						-- used for feedback, thus setting the ring frequency.
-						when mmu_fck => fck_mask <= cpu_data_out;
-						
-						-- The I2C bit-banging interface. Each write to one of these
-						-- locations sets both SDA and SCL to one of zero, one, or
-						-- high-impedance. We operate the I2C by writing register A
-						-- to these locations. Some locations take the top bit of A
-						-- and, when this bit is zero, drive SDA low. Others cause
-						-- the value of SDA to be shifted into the i2C byte register,
-						-- from which it can later be read out. With the CPU in boost
-						-- mode, the interface runs at 500 kHz. See the I2C assembler
-						-- routine for more details.
-						when mmu_i2c00 => 
-							SDA <= '0';
-							SCL <= '0';
-						when mmu_i2c01 =>
-							SDA <= '0';
-							SCL <= '1';
-						when mmu_i2cA0 => 
-							if (cpu_data_out(7) = '0') then
-								SDA <= '0';
-							else
-								SDA <= 'Z';
-							end if;
-							SCL <= '0';
-						when mmu_i2cA1 =>
-							if (cpu_data_out(7) = '0') then
-								SDA <= '0';
-							else
-								SDA <= 'Z';
-							end if;
-							SCL <= '1';
-						when mmu_i2cZ0 => 
-							SDA <= 'Z';
-							SCL <= '0';
-						when mmu_i2cZ1 => 
-							SDA <= 'Z';
-							SCL <= '1';
-							i2c_in(7 downto 1) <= i2c_in(6 downto 0);
-							i2c_in(0) <= SDA;
-							
-						-- The sample select control register begins with two
-						-- bits to select which accumulated sample the CPU
-						-- will get when it reads the sample memory HI and
-						-- LO bytes. The sample memory will accept this 
-						-- sample select value provided that ADCBSY is not
-						-- asserted. The ACCRST and SMWRCPU strobes reset the
-						-- accumulator output and write the accumulator output
-						-- to the selected accumulated sample.
-						when mmu_smcr =>
-							sample_sel <= cpu_data_out(1 downto 0);
-							ACCRST <= cpu_data_out(2);
-							SMWRCPU <= cpu_data_out(3);
-							
-						-- We have four locations to describe how each input
-						-- is to be sampled.
-						when mmu_x1cfg =>
-							x1_shift <= cpu_data_out(2 downto 0);
-							X1SKIP <= cpu_data_out(7) = '1';
-						when mmu_x2cfg =>
-							x2_shift <= cpu_data_out(2 downto 0);
-							X2SKIP <= cpu_data_out(7) = '1';
-						when mmu_x3cfg =>
-							x3_shift <= cpu_data_out(2 downto 0);
-							X3SKIP <= cpu_data_out(7) = '1';
-						when mmu_x4cfg =>
-							x4_shift <= cpu_data_out(2 downto 0);
-							X4SS <= (cpu_data_out(3) = '1');
-							X4SKIP <= cpu_data_out(7) = '1';
-
-						-- For all other addresses, we have no bits to set.
-						-- he shadow RAM is recording all writes to these 
-						-- addresses, and will respond to reads for which 
-						-- no readable register is implemented.
-						when others => null;
-					end case;
-				end if;
-			end if;
-		end if;
-	end process;
-	
--- The Boost Controller switches the CPU between RCK and a 5-MHz it
--- generates using FCK. We call this 5-MHz clock the Transmit Clock 
--- (TCK). When the CPU's clock CK is set to TCK, we are in "boost" mode. 
--- When CK = RCK we are in "slow" mode. Switching to boost is easy
--- because we know the state of RCK when we want to switch into boost. 
--- Either the CPU just asserted BOOST with a regiseter write, or it 
--- just asserted Interrupt Service (ISRV). Both occur on the falling 
--- edge of CK, so RCK  will be LO for at least 15 us. We come out of 
--- boost when both BOOST and ISRV are un-asserted. We use signal 
--- RCKLO to coordinate the transition from TCK to RCK. We will perform
--- this transition only when both TCK and RCK are LO and guaranteed
--- to remain LO for at least two FCK cycles. We care about the value of 
--- RCKLO only when FCK is running and BOOST has been unasserted. We
--- assert RCKLO after each falling edge of RCK for a one hundred FCK
--- cycles, which will be 10 us if FCK is exactly 10 MHz, but longer
--- if FCK is running slower, as it will before calibration. We assume
--- that FCK will always be at least 7 MHz so that RCKLO will never
--- exceed 15 us and remain asserted during the next rising edge of RCK.
--- During transitions between boost and slow modes, TCK will skip some
--- cycles. We must refrain from moving in and out of boost while some
--- other process is relying on TCK to be sustained. For example, we must 
--- not boost or un-boost during a telemetry sample transmission.
-	Boost_Controller : process (RESET, FCK) is
-	variable state, next_state : integer range 0 to 3;
-	constant end_count : integer := 100;
-	variable counter : integer range 0 to 127;
-	begin
-	
-		-- Generate KEEPFCK, RCKLO, and RCKHI.
-		if (RESET = '1') then
-			SRCK <= '0';
-			SSRCK <= '0';
-			counter := 0;
-			RCKLO <= false;
-			KEEPFCK <= false;
-		elsif rising_edge(FCK) then
-			KEEPFCK <= (state /= 0);
-			SRCK <= RCK;
-			SSRCK <= SRCK;
-			
-			if not KEEPFCK then
-				RCKLO <= true;
-			elsif (SRCK = '0') and (SSRCK = '1') then
-				RCKLO <= true;
-			elsif (counter = end_count) then 
-				RCKLO <= false;
-			end if;
-			
-			if (not RCKLO) or (not KEEPFCK) then
-				counter := 0;
-			else
-				counter := counter + 1;
-			end if;
-		end if;
-		
-		-- Manage transition from slow to boost and back to slow.
-		if RESET = '1' then
-			state := 0;
-			TCK <= '0';
-		elsif falling_edge(FCK) then
-			case state is
-				when 0 =>
-					if BOOST or CPUISRV then 
-						TCK <= '0';
-						next_state := 1;
-					else
-						TCK <= to_std_logic(TCK = '0');
-						next_state := 0;
-					end if;
-				when 1 => 
-					next_state := 3;
-					TCK <= '0';
-				when 3 =>
-					if (not BOOST) and (not CPUISRV) then
-						TCK <= '0';
-						next_state := 2;
-					else
-						TCK <= to_std_logic(TCK = '0');
-						next_state := 3;
-					end if;
-				when 2 => 
-					if RCKLO then
-						next_state := 0;
-					else
-						next_state := 2;
-					end if;
-					TCK <= '0';
-			end case;
-			state := next_state;
-		end if;
-		
-		-- The clock selector: boost or slow according to state.
-		CK <= to_std_logic(
-			((RCK = '1') and (state = 0)) 
-			or ((TCK = '1') and (state = 3)));
-	end process;
-
--- The Interrupt Controller provides the interrupt signal to the CPU in response to
--- timer events. By default, at power-up, all interrupts are masked. We can set the
--- period of each timer by writing to locations in the CPU control space. If we want
--- the counter to have period N ticks, we write value N-1 to the period registers.
-	Interrupt_Controller : process (RCK, int_rst) is
-	begin
-	
-		-- Synchronize the int_rst bits with RCK. Our interrupt counters run off RCK, 
-		-- and the interrupt lines themselves are generated by RCK, but the interrupt
-		-- reset signals are asserted by the CPU during interrupt servicing, for which
-		-- the CPU is in boost mode, running of the 5-MHz TCK. Our registers can handle 
-		-- asynchronous assertion of reset, but not asynchronous unassertion of reset. 
-		-- We must make the unassertion synchronous with the clock that drives the register.
-	
-		-- Interrupt One Reset
-		if int_rst(0) = '1' then
-			int_rst_d(0)  <= '1';
-			int_rst_s(0) <= '1';
-		elsif falling_edge(RCK) then
-			int_rst_d(0)  <= '0';
-			int_rst_s(0) <= int_rst_d(0);
-		end if;
-		
-		-- The interrupt timers run all the time, counting down from their period value
-		-- to zero. The only way to stop them counting is to set their period value to
-		-- zero so that they stick at zero. Just disabling the interrupt does not stop 
-		-- the counter.
-
-		-- Interrupt One: Set by a rising edge on TMINT from the Telemetry Manager.
-		if rising_edge(RCK) then
-			TMINTD <= TMINT;
-		end if;
-		
-		-- Using the interrupt reset bits that we synchronized with RCK, we 
-		-- reset the interrupt bits. Otherwise, we set the interrupt bits
-		-- either with some external flag or when a timer reaches zero.
-				
-		-- Interrupt One Control
-		if (int_rst_s(0) = '1') then
-			int_bits(0) <= '0';
-		elsif rising_edge(RCK) then
-			if (TMINT and (not TMINTD)) then
-				int_bits(0) <= '1';
-			end if;
-		end if;
-		
-		-- We disable the remaining interrupt lines.
-		for i in 1 to 7 loop
-			int_bits(i) <= '0';
-		end loop;		
-	end process;
-
--- The Interrupt Generator takes the interrupt bits and the interrupt mask
--- and combines them to create an interrupt reques for the CPU, which we 
--- synchronize with CK.
-	Interrupt_Generator : process (CK) is
-	begin
-		if RESET = '1' then
-			CPUIRQ <= false;
-		elsif falling_edge(CK) then
-			CPUIRQ <= (int_bits and int_mask) /= "00000000";
-		end if;
-	end process;
-	
 -- The Telemetry Manager organizes sampling of the inputs X1-X4 a
 -- frequency that is an integer fraction of 1024 SPS and generates
 -- the transmit interrupt offset from sampling by a random number
@@ -794,6 +236,7 @@ begin
 		constant tm_sample : integer := tm_max - 2;
 		variable state, next_state : integer range 0 to tm_max := 0;
 		variable TMRUN : boolean;
+		constant tx_period : integer := 4;
 		variable tx_index : integer range 0 to 31;
 		
 	begin
@@ -804,9 +247,7 @@ begin
 			TMINT <= false;
 			TMRUN := false;
 			state := tm_idle;
-		elsif rising_edge(RCK) then
-			TMRUN := (int_mask(0) = '1');
-			
+		elsif rising_edge(RCK) then			
 			if not TMRUN then
 				next_state := tm_idle;
 			else
@@ -827,14 +268,14 @@ begin
 				SCRST <= true;
 				TMINT <= false;
 				if tx_index = 1 then
-					tx_index := to_integer(unsigned(int_period_0));
+					tx_index := tx_period;
 				else
 					tx_index := tx_index - 1;
 				end if;
 			elsif (state = tm_idle) then
 				SCRST <= false;
 				if not TMRUN then
-					tx_index := to_integer(unsigned(int_period_0));
+					tx_index := tx_period;
 				end if;
 			else
 				SCRST <= false;
@@ -853,8 +294,7 @@ begin
 	Sample_Memory : entity SMRAM port map (
 		Clock => not FCK,
 		ClockEn => '1',
-        Reset => '0',
-		WE => SMWRADC or SMWRCPU,
+ 		WE => SMWRADC or SMWRCPU,
 		Address => smem_addr, 
 		Data => acc_data,
 		Q => smem_data);
@@ -1336,7 +776,5 @@ begin
 	end process;
 	
 -- Test Point appears on P1-7.
-	TP <= to_std_logic(CPUISRV);
---	TP <= to_std_logic(ADCBSY);
---	TP <= to_std_logic(ENFCKTM);
+	TP <= to_std_logic(ENFCKTM);
 end behavior;
