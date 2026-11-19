@@ -239,61 +239,62 @@ begin
 -- This interaction between two processes, one running on RCK and one on 
 -- FCK works provided that the Sample Controller runs on the rising edge 
 -- of FCK and toggles SCACK on the falling edge. 
-	Telemetry_Manager : process (RCK) is 
-		constant tm_max : integer := 31;
-		constant tm_idle : integer := tm_max;
-		constant tm_update : integer := tm_max - 1;
-		constant tm_sample : integer := tm_max - 2;
-		variable state, next_state : integer range 0 to tm_max := 0;
-		variable tx_index : integer range 1 to tx_period := tx_period;		
-		
-	begin
-		if RESET = '1' then
-			ENFCKTM <= false;
-			SCRST <= true;
-			SCRQ <= false;
-			TDRQ <= false;
-			state := tm_idle;
-		elsif rising_edge(RCK) then			
-			if not TMRUN then
-				next_state := tm_idle;
-			else
-				if state = tm_idle then
-					next_state := 0;
-				else
-					next_state := state + 1;
-				end if;
-			end if;
-			
-			if (state = to_integer(unsigned(transmit_shift))) then
-				if tx_index = 1 then
-					TDRQ <= not TDRQ;
-				end if;
-			elsif (state = tm_sample) then
-				SCRQ <= not SCRQ;
-			elsif (state = tm_update) then
-				SCRST <= true;
-				TDRST <= true;
-				if tx_index = 1 then
-					tx_index := tx_period;
-				else
-					tx_index := tx_index - 1;
-				end if;
-			elsif (state = tm_idle) then
-				SCRST <= false;
-				TDRST <= false;
-				if not TMRUN then
-					tx_index := tx_period;
-				end if;
-			else
-				SCRST <= false;
-			end if;
-			
-			state := next_state;
-		end if;
-		
-		ENFCKTM <= (SCRQ xor SCACK) or (TDRQ xor TDACK);
-	end process;
+
+Telemetry_Manager : process (RCK) is
+    constant tm_max : integer := 31;
+    constant tm_idle : integer := tm_max;
+    constant tm_update : integer := tm_max - 1;
+    constant tm_sample : integer := tm_max - 2;
+    variable state, next_state : integer range 0 to tm_max := 0;
+    variable tx_index : integer range 0 to tx_period-1;
+
+begin
+    if RESET = '1' then
+        ENFCKTM <= false;
+        SCRST <= true;
+        SCRQ <= false;
+        TDRQ <= false;
+        state := tm_idle;
+    elsif rising_edge(RCK) then
+        if not TMRUN then
+            next_state := tm_idle;
+        else
+            if state = tm_idle then
+                next_state := 0;
+            else
+                next_state := state + 1;
+            end if;
+        end if;
+
+        if (state = to_integer(unsigned(transmit_shift))) then
+            if tx_index = 0 then
+                TDRQ <= not TDRQ;
+            end if;
+        elsif (state = tm_sample) then
+            SCRQ <= not SCRQ;
+        elsif (state = tm_update) then
+            SCRST <= true;
+            TDRST <= true;
+            if tx_index = 0 then
+                tx_index := tx_period - 1;
+            else
+                tx_index := tx_index - 1;
+            end if;
+        elsif (state = tm_idle) then
+            SCRST <= false;
+            TDRST <= false;
+            if not TMRUN then
+                tx_index := tx_period - 1;
+            end if;
+        else
+            SCRST <= false;
+        end if;
+
+        state := next_state;
+    end if;
+
+    ENFCKTM <= (SCRQ xor SCACK) or (TDRQ xor TDACK);
+end process;
 
 -- The Sample Memory is fourteen bits wide so as to accommodate
 -- our fourteen-bit ADC samples. The sample memory runs off 
@@ -346,7 +347,6 @@ begin
 -- Sample Controller with shared ADC sequencing.
 -- The ADC index selects X1, X2, X3, or X4.
 -- Each ADC uses the same check/start/wait sequence.
-
 Sample_Controller : process (FCK) is
     variable state, next_state : integer range 0 to 5 := 0;
     variable adc_index : integer range 0 to 3 := 0;
@@ -601,12 +601,10 @@ begin
         );
 
         -- ADC busy flag.
-        ADCBSY <=
-            ((not ADCCAL) and
-                (state > 0) and (state < read_end))
-            or
-            (ADCCAL and
-                (state > 0) and (state < calib_end));
+		ADCBSY <=
+			(state > 0)
+			and (state < calib_end)
+			and (ADCCAL or (state < read_end));
 
         state := next_state;
     end if;
