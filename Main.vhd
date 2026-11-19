@@ -245,7 +245,7 @@ begin
 		constant tm_update : integer := tm_max - 1;
 		constant tm_sample : integer := tm_max - 2;
 		variable state, next_state : integer range 0 to tm_max := 0;
-		variable tx_index : integer range 0 to 31;
+		variable tx_index : integer range 1 to tx_period := tx_period;		
 		
 	begin
 		if RESET = '1' then
