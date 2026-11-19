@@ -1,7 +1,12 @@
 -- A3054L Long-Life IPT Firmware, Top-Level Unit
 
 -- V2.0 [18-NOV-26] Based upon P3054 V1.9. Creating long-life version. Remove
--- all EBR use, remove OSR8, interrupt timer, memory management unit. 
+-- all EBR use, remove OSR8, interrupt timer, memory management unit. Create
+-- Telemetry dispatcher to pass sample memory values to the Message Transmitter
+-- and clear the sample memory afterwards. With all four analog inputs being
+-- sampled, accumulated four times, and transmitted at 256 SPS, logic consumes
+-- 232 LUTs. No contact with the accelerometer, non-volatile memory, or
+-- temperature sensor yet supported.
 
 
 library ieee;  
@@ -57,6 +62,10 @@ entity main is
 	constant x2_sel : std_logic_vector(1 downto 0) := "01";
 	constant x3_sel : std_logic_vector(1 downto 0) := "10";
 	constant x4_sel : std_logic_vector(1 downto 0) := "11";
+	constant x1_channel : integer := 1;
+	constant x2_channel : integer := 2;
+	constant x3_channel : integer := 3;
+	constant x4_channel : integer := 4;	
 end;
 
 architecture behavior of main is
@@ -112,7 +121,7 @@ architecture behavior of main is
 		
 -- Sample Memory and Accumulator
 	signal SMWRADC, -- Sample Memory Write by ADC Controller
-		SMWRCPU, -- Sample Memory Write by CPU
+		SMWRTD, -- Sample Memory Write by Telemetry Dispatcher
 		ACCADD, -- Accumulator Add
 		ACCRST -- Accumulator Reset
 		: std_logic;
@@ -223,13 +232,13 @@ begin
 -- Controller and Telemetry Dispatcher that it manages run off
 -- FCK. In the manager's sample state, the manager unasserts Sample
 -- Controller Reset (SCRST) so that the Sample Controller can come out 
--- of reset on the next rising edge of FCK. The manager also toggles the SCRQ so as to request
--- that FCK start up. The Sample Controller will set SCACK equal to
--- SCRQ when it has finished sampling. The manager enables FCK when 
--- SCRQ and SCACK are not equal. This interaction between two
--- processes, one running on RCK and one on FCK works provided that
--- the Sample Controller runs on the rising edge of FCK and toggles 
--- SCACK on the falling edge. 
+-- of reset on the next rising edge of FCK. The manager also toggles 
+-- Sample Controller Request (SCRQ) so as to request that FCK start up.
+-- The Sample Controller will set SCACK equal to SCRQ when it has finished 
+-- sampling. The manager enables FCK when SCRQ and SCACK are not equal. 
+-- This interaction between two processes, one running on RCK and one on 
+-- FCK works provided that the Sample Controller runs on the rising edge 
+-- of FCK and toggles SCACK on the falling edge. 
 	Telemetry_Manager : process (RCK) is 
 		constant tm_max : integer := 31;
 		constant tm_idle : integer := tm_max;
@@ -293,7 +302,7 @@ begin
 	Sample_Memory : entity SMRAM port map (
 		Clock => not FCK,
 		ClockEn => '1',
- 		WE => SMWRADC or SMWRCPU,
+ 		WE => SMWRADC or SMWRTD,
 		Address => smem_addr, 
 		Data => acc_data,
 		Q => smem_data);
@@ -639,16 +648,26 @@ begin
 -- must start up when the flags are not equal, but the Telemetry Dispatcher does
 -- not turn on FCK itself. This signalling and clock control between the manager
 -- and the dispatcher is identical to that which exists between the manager and
--- the Sample Controller.  
+-- the Sample Controller. For each active telemetry channel, the dispatcher 
+-- selects the channel's location in the sample memory, and arranges for the 
+-- top sixteen bits of the sample to be transmitted.
 	Telemetry_Dispatcher : process (RESET, FCK) is
 	variable state, next_state : integer range 0 to 15 := 0;
 	constant td_idle : integer := 0;
-	constant td_x1 : integer := 1;
-	constant td_x2 : integer := 2;
-	constant td_x3 : integer := 3;
-	constant td_x4 : integer := 4;
-	constant td_done : integer := 14;
-	constant td_wait : integer:= 15;
+	constant x1_tx : integer := 1;
+	constant x1_wt : integer := 2;
+	constant x1_clr : integer := 3;
+	constant x2_tx : integer := 4;
+	constant x2_wt : integer := 5;
+	constant x2_clr : integer := 6;
+	constant x3_tx : integer := 7;
+	constant x3_wt : integer := 8;
+	constant x3_clr : integer := 9;
+	constant x4_tx : integer := 10;
+	constant x4_wt : integer := 11;
+	constant x4_clr : integer := 12;
+	constant td_done : integer := 13;
+	constant td_wait : integer:= 14;
 	
 	begin
 		xmit_bits <= smem_data(17 downto 2);
@@ -665,32 +684,112 @@ begin
 			state := td_idle;
 		elsif rising_edge(FCK) then
 			
+			ACCRST <= '0';
+			SMWRTD <= '0';
+			TXI <= false;
+			next_state := td_wait;
+			
 			if (state = td_idle) and (TDRQ xor TDACK) then 
-				next_state := next_state + 1;
-			elsif (state = td_x1) then
-				next_state := td_x2;
+				next_state := x1_tx;
 				sample_sel <= x1_sel;
+				tx_channel <= x1_channel;
+			elsif (state = x1_tx) then
+				if TXA then 
+					next_state := x1_wt; 
+				end if;
+				sample_sel <= x1_sel;
+				tx_channel <= x1_channel;
 				TXI <= true;
-			elsif (state = td_x2) then
-				next_state := td_x3;
+			elsif (state = x1_wt) then
+				if TXA then
+					next_state := x1_wt;
+				else
+					next_state := x1_clr;
+				end if;
+				tx_channel <= x1_channel;
 				sample_sel <= x1_sel;
-			elsif (state = td_x3) then
-				next_state := td_x4;
+			elsif (state = x1_clr) then
+				next_state := x2_tx;
+				ACCRST <= '1';
+				SMWRTD <= '1';
 				sample_sel <= x1_sel;
-			elsif (state = td_x4) then
+				tx_channel <= x1_channel;
+			elsif (state = x2_tx) then
+				if TXA then 
+					next_state := x2_wt;
+				end if;
+				sample_sel <= x2_sel;
+				tx_channel <= x2_channel;
+				TXI <= true;
+			elsif (state = x2_wt) then
+				if TXA then
+					next_state := x2_wt;
+				else
+					next_state := x2_clr;
+				end if;
+				sample_sel <= x2_sel;
+				tx_channel <= x2_channel;
+			elsif (state = x2_clr) then
+				next_state := x3_tx;
+				ACCRST <= '1';
+				SMWRTD <= '1';
+				sample_sel <= x2_sel;
+				tx_channel <= x2_channel;
+			elsif (state = x3_tx) then
+				if TXA then 
+					next_state := x3_wt;
+				end if;
+				sample_sel <= x3_sel;
+				tx_channel <= x3_channel;
+				TXI <= true;
+			elsif (state = x3_wt) then
+				if TXA then
+					next_state := x3_wt;
+				else
+					next_state := x3_clr;
+				end if;
+				sample_sel <= x3_sel;
+				tx_channel <= x3_channel;
+			elsif (state = x3_clr) then
+				next_state := x4_tx;
+				ACCRST <= '1';
+				SMWRTD <= '1';
+				sample_sel <= x3_sel;
+				tx_channel <= x3_channel;
+			elsif (state = x4_tx) then
+				if TXA then 
+					next_state := x4_wt;
+				end if;
+				sample_sel <= x4_sel;
+				tx_channel <= x4_channel;
+				TXI <= true;
+			elsif (state = x4_wt) then
+				if TXA then
+					next_state := x4_wt;
+				else
+					next_state := x4_clr;
+				end if;
+				sample_sel <= x4_sel;
+				tx_channel <= x4_channel;
+			elsif (state = x4_clr) then
 				next_state := td_done;
-				sample_sel <= x1_sel;
+				ACCRST <= '1';
+				SMWRTD <= '1';
+				sample_sel <= x4_sel;
+				tx_channel <= x4_channel;
 			elsif (state = td_done) then
 				next_state := td_wait;
+				sample_sel <= x1_sel;
+				tx_channel <= x1_channel;
 			else 
 				next_state := td_wait;
-				TXI <= false;
+				sample_sel <= x1_sel;
+				tx_channel <= x1_channel;
 			end if;
 			
 			state := next_state;
 		end if;		
 	end process;
-	
 
 -- The Message Transmitter responds to Transmit Initiate (TXI) by turning on the 
 -- radio-frequency oscillator, reading sixteen bits from one of the sensors and
