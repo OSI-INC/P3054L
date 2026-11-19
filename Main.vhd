@@ -40,7 +40,19 @@ entity main is
 	constant frequency_step : integer := 1; 
 	constant default_frequency_low : integer := 5;
 	
+-- Configuration of the Telemetry Manager
+	constant TMRUN : boolean := true; -- Run the Telemetry Protocol
+	constant tx_period : integer := 4; -- Shortest Period of All Signals
+	
 -- Sample and Accumulate Constants
+	constant x1_shift : std_logic_vector(2 downto 0) := "010";
+	constant x2_shift : std_logic_vector(2 downto 0) := "010";
+	constant x3_shift : std_logic_vector(2 downto 0) := "010";
+	constant x4_shift : std_logic_vector(2 downto 0) := "010";
+	constant X1SKIP : boolean := false;
+	constant X2SKIP : boolean := false;
+	constant X3SKIP : boolean := false;
+	constant X4SKIP : boolean := false;
 	constant x1_sel : std_logic_vector(1 downto 0) := "00";
 	constant x2_sel : std_logic_vector(1 downto 0) := "01";
 	constant x3_sel : std_logic_vector(1 downto 0) := "10";
@@ -73,22 +85,12 @@ architecture behavior of main is
 		(fck_num_feeds-1 => '1', others => '0');
 
 -- Clock Control. 
-	signal ENFCKCPU, -- Enable Fast Clock, from CPU
-		ENFCKTM, -- Enable Fast Clock, from Telemetry Manager
-		BOOST, -- Boost CPU Clock
-		KEEPFCK, -- Keep FCK Running
-		RCKLO -- RCK is LO
-		: boolean; 
+	signal ENFCKTM : boolean; -- Enable Fast Clock, from Telemetry Manager
 	signal SRCK, -- RCK Synchronized with FCK
 		SSRCK -- SRCK Delayed by one FCK Period
 		: std_logic; 
-	attribute syn_keep of BOOST, ENFCKCPU, ENFCKTM : signal is true;
-	attribute nomerge of BOOST, ENFCKCPU, ENFCKTM : signal is "";
-
--- Telemetry Manager
-	signal TMINT, -- Telemetry Manager Interrupt
-		TMINTD -- TMINT Delayed
-		: boolean := false;
+	attribute syn_keep of ENFCKTM : signal is true;
+	attribute nomerge of ENFCKTM : signal is "";
 
 -- Sample Controller
 	signal SCRQ, -- Sample Controller Request
@@ -99,9 +101,15 @@ architecture behavior of main is
 		: boolean := false;
 	attribute syn_keep of SCRST, SCBSY : signal is true;
 	attribute nomerge of SCRST, SCBSY : signal is "";  
-	signal x1_shift, x2_shift, x3_shift, x4_shift : std_logic_vector(2 downto 0);
-	signal X1SKIP, X2SKIP, X3SKIP, X4SKIP : boolean;
 
+-- Telemetry Dispatcher
+	signal TDRST, -- Telemetry Dispatcher Reset
+		TDRQ, -- Telemetry Dispatcher Request
+		TDACK -- Telemetry Dispatcher Acknowledge
+		: boolean := false;
+	attribute syn_keep of TDRST : signal is true;
+	attribute nomerge of TDRST : signal is "";  
+		
 -- Sample Memory and Accumulator
 	signal SMWRADC, -- Sample Memory Write by ADC Controller
 		SMWRCPU, -- Sample Memory Write by CPU
@@ -189,7 +197,7 @@ begin
 -- The Fast Clock process produces FCK when one of several flags are asserted.
 -- The ring oscillator should be calibrated so that it produces FCK of 10 MHz.
 	FCKEN <= to_std_logic(ENFCKTM);
-	Fast_Clock: entity ring_oscillator 
+	Fast_Clock : entity ring_oscillator 
 		generic map (
 			num_gates => fck_num_gates,
 			num_feeds => fck_num_feeds
@@ -200,32 +208,25 @@ begin
 			CK => FCK
 		);
 		
--- The Millisecond Clock takes RCK, which is 32.768 kHz and divides
--- by 32 to get 1.024 kHz, which we use as our millisecond clock.
-	Millisecond_Clock : process (RCK) is
-		variable mcnt : integer range 0 to 31;
+-- The Transmit Clock is FCK divided by two.
+	Transmit_Clock : process (FCK) is
 	begin
-		if falling_edge(RCK) then
-			mcnt := mcnt + 1;
-			if (mcnt <= 15) then
-				MCK <= '0';
-			else
-				MCK <= '1';
-			end if;
-		end if;	
+		if falling_edge(FCK) then
+			TCK <= not TCK;
+		end if;
 	end process;
 			
--- The Telemetry Manager organizes sampling of the inputs X1-X4 a
+-- The Telemetry Manager organizes sampling of the inputs X1-X4 at
 -- frequency that is an integer fraction of 1024 SPS and generates
 -- the transmit interrupt offset from sampling by a random number
 -- of RCK periods. The manager runs off RCK, but the Sample
--- Controller, which it activates in its sample state, runs off
--- FCK. In the sample state, the manager unasserts SCRST so that 
--- the Sample Controller can come out of reset on the next rising 
--- edge of FCK. The manager also toggles the SCRQ so as to request
+-- Controller and Telemetry Dispatcher that it manages run off
+-- FCK. In the manager's sample state, the manager unasserts Sample
+-- Controller Reset (SCRST) so that the Sample Controller can come out 
+-- of reset on the next rising edge of FCK. The manager also toggles the SCRQ so as to request
 -- that FCK start up. The Sample Controller will set SCACK equal to
 -- SCRQ when it has finished sampling. The manager enables FCK when 
--- SCRQ and SCACK are not equal, This interaction between two
+-- SCRQ and SCACK are not equal. This interaction between two
 -- processes, one running on RCK and one on FCK works provided that
 -- the Sample Controller runs on the rising edge of FCK and toggles 
 -- SCACK on the falling edge. 
@@ -235,8 +236,6 @@ begin
 		constant tm_update : integer := tm_max - 1;
 		constant tm_sample : integer := tm_max - 2;
 		variable state, next_state : integer range 0 to tm_max := 0;
-		variable TMRUN : boolean;
-		constant tx_period : integer := 4;
 		variable tx_index : integer range 0 to 31;
 		
 	begin
@@ -244,8 +243,7 @@ begin
 			ENFCKTM <= false;
 			SCRST <= true;
 			SCRQ <= false;
-			TMINT <= false;
-			TMRUN := false;
+			TDRQ <= false;
 			state := tm_idle;
 		elsif rising_edge(RCK) then			
 			if not TMRUN then
@@ -260,13 +258,13 @@ begin
 			
 			if (state = to_integer(unsigned(transmit_shift))) then
 				if tx_index = 1 then
-					TMINT <= true;
+					TDRQ <= not TDRQ;
 				end if;
 			elsif (state = tm_sample) then
 				SCRQ <= not SCRQ;
 			elsif (state = tm_update) then
 				SCRST <= true;
-				TMINT <= false;
+				TDRST <= true;
 				if tx_index = 1 then
 					tx_index := tx_period;
 				else
@@ -274,6 +272,7 @@ begin
 				end if;
 			elsif (state = tm_idle) then
 				SCRST <= false;
+				TDRST <= false;
 				if not TMRUN then
 					tx_index := tx_period;
 				end if;
@@ -284,7 +283,7 @@ begin
 			state := next_state;
 		end if;
 		
-		ENFCKTM <= SCRQ xor SCACK;
+		ENFCKTM <= (SCRQ xor SCACK) or (TDRQ xor TDACK);
 	end process;
 
 -- The Sample Memory is fourteen bits wide so as to accommodate
@@ -394,7 +393,7 @@ begin
 				adc_sel <= x1_sel;
 				adc_shift <= x1_shift;
 				ADCRD <= false;
-				if ENFCKTM then
+				if (SCRQ xor SCACK) then
 					next_state := x1_check;
 				else
 					next_state := sc_idle;
@@ -632,6 +631,66 @@ begin
 		NADC3 <= to_std_logic(not (ADCBSY and (adc_sel = x3_sel)));
 		NADC4 <= to_std_logic(not (ADCBSY and (adc_sel = x4_sel)));
 	end process;
+	
+-- The Telemetry Dispatcher runs of FCK and is reset by Telemetry Dispatcher 
+-- Reset (TDRST) and initiated by inequality between the two flags Telemetry
+-- Dispatcher Request (TDRQ) and Telemetry Dispatcher Acknowledge (TDACK).
+-- The TDRST and TDRQ flags are controlled by the Telemetry Manager. The FCK
+-- must start up when the flags are not equal, but the Telemetry Dispatcher does
+-- not turn on FCK itself. This signalling and clock control between the manager
+-- and the dispatcher is identical to that which exists between the manager and
+-- the Sample Controller.  
+	Telemetry_Dispatcher : process (RESET, FCK) is
+	variable state, next_state : integer range 0 to 15 := 0;
+	constant td_idle : integer := 0;
+	constant td_x1 : integer := 1;
+	constant td_x2 : integer := 2;
+	constant td_x3 : integer := 3;
+	constant td_x4 : integer := 4;
+	constant td_done : integer := 14;
+	constant td_wait : integer:= 15;
+	
+	begin
+		xmit_bits <= smem_data(17 downto 2);
+		
+		if RESET = '1' then
+			TDACK <= false;
+		elsif falling_edge(FCK) then
+			if (state = td_wait) then
+				TDACK <= TDRQ;
+			end if;
+		end if;
+			
+		if TDRST then
+			state := td_idle;
+		elsif rising_edge(FCK) then
+			
+			if (state = td_idle) and (TDRQ xor TDACK) then 
+				next_state := next_state + 1;
+			elsif (state = td_x1) then
+				next_state := td_x2;
+				sample_sel <= x1_sel;
+				TXI <= true;
+			elsif (state = td_x2) then
+				next_state := td_x3;
+				sample_sel <= x1_sel;
+			elsif (state = td_x3) then
+				next_state := td_x4;
+				sample_sel <= x1_sel;
+			elsif (state = td_x4) then
+				next_state := td_done;
+				sample_sel <= x1_sel;
+			elsif (state = td_done) then
+				next_state := td_wait;
+			else 
+				next_state := td_wait;
+				TXI <= false;
+			end if;
+			
+			state := next_state;
+		end if;		
+	end process;
+	
 
 -- The Message Transmitter responds to Transmit Initiate (TXI) by turning on the 
 -- radio-frequency oscillator, reading sixteen bits from one of the sensors and
