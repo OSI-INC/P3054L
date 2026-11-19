@@ -314,7 +314,7 @@ end process;
 -- Controller as it steps through the ADCs performing samples. The
 -- latter is set by the CPU with a write to the sample memory
 -- address register.
-	Sample_Addr_Mux : process (SCBSY) is 
+	Sample_Addr_Mux : process (all) is 
 	begin
 		if SCBSY then
 			smem_addr <= adc_sel;
