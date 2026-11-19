@@ -532,8 +532,7 @@ begin
     -- Calibration reads have nine trailing zeros instead.
     elsif falling_edge(FCK) then
 
-        -- Shared state-counter logic for normal and
-        -- calibration reads.
+        -- Shared state-counter logic.
         if (state = 0) then
             if ADCRD then
                 next_state := 1;
@@ -547,19 +546,10 @@ begin
             next_state := state + 1;
         end if;
 
-        -- Generate SCK and acquire ADC data.
+        -- Acquire ADC data.
         if ADCCAL then
-            SCK <= to_std_logic(
-                (state = 0)
-                or ((state < 48) and (state mod 2) = 1)
-            );
             adc_data <= (others => '0');
         else
-            SCK <= to_std_logic(
-                (state = 0)
-                or ((state < 36) and ((state mod 2) = 1))
-            );
-
             if (state = 1) then
                 adc_data <= (others => '0');
             end if;
@@ -580,6 +570,17 @@ begin
                 adc_data(0) <= '0';
             end if;
         end if;
+
+        -- Shared SCK generation for normal and
+        -- calibration reads.
+        SCK <= to_std_logic(
+            (state = 0)
+            or (
+                ((state mod 2) = 1)
+                and (state < 48)
+                and (ADCCAL or (state < 36))
+            )
+        );
 
         -- Update the transmit-scatter shift register.
         if (state = 31) then
@@ -625,7 +626,6 @@ begin
         not (ADCBSY and (adc_sel = x4_sel))
     );
 end process;
-	
 
 -- The Telemetry Dispatcher runs off FCK and is reset by TDRST.
 -- It transmits four channels in sequence, clearing each
