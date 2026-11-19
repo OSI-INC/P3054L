@@ -874,20 +874,7 @@ end process;
 		end if;
 	end process;
 	
--- Test Point appears on P1-7.
-	Operating_Life : process (RCK) is
-		constant count_len : integer := 10;
-		variable tx_count : unsigned(count_len-1 downto 0);
-	begin
-		if RESET = '1' then
-			tx_count := (others => '0');
-		elsif rising_edge(RCK) then
-			if TMCK then
-				tx_count := tx_count + 1;
-			else
-				tx_count := tx_count;
-			end if;
-		end if;
-		TP <= tx_count(count_len-1);
-	end process;
+	SDA <= '1';
+	SCL <= '1';
+	TP <= RP;
 end behavior;
