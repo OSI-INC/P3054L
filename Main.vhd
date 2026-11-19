@@ -254,6 +254,7 @@ begin
 			SCRQ <= false;
 			TDRQ <= false;
 			state := tm_idle;
+			tx_index := 0;
 		elsif rising_edge(RCK) then			
 			if not TMRUN then
 				next_state := tm_idle;
