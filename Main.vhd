@@ -553,12 +553,8 @@ begin
         end if;
 
         -- Accumulator and sample-memory control.
-        ACCADD <= to_std_logic(
-            (state = read_end - 1) and (not ADCCAL)
-        );
-        SMWRADC <= to_std_logic(
-            (state = read_end) and (not ADCCAL)
-        );
+        ACCADD <= to_std_logic((state = read_end - 1) and (not ADCCAL));
+        SMWRADC <= to_std_logic((state = read_end) and (not ADCCAL));
 
         -- ADC busy flag.
 		ADCBSY <=
