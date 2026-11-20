@@ -1,0 +1,10 @@
+#Start recording tcl command: 11/20/2026 14:07:57
+#Project Location: C:/Kevan/A3054/P3054L; Project name: P3054L
+prj_project open "C:/Kevan/A3054/P3054L/P3054L.ldf"
+prj_src add "C:/Kevan/OSR8/OSR8V4.vhd"
+prj_src add "C:/Kevan/A3054/P3054L/ROM.ipx"
+prj_src add "C:/Kevan/A3054/P3054L/RAM.ipx"
+prj_run Synthesis -impl impl1
+prj_project save
+prj_project close
+#Stop recording: 11/20/2026 14:34:08
