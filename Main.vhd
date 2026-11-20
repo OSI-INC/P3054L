@@ -14,6 +14,9 @@
 -- putting the thermometer to sleep, current consumption keeps jumping
 -- up to 200 uA.
 
+-- V2.2 [20-NOV-26] All ADCs have same shift and sample rate, but each
+-- can be disabled. Channel numbers are sequential
+
 library ieee;  
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -56,10 +59,6 @@ entity main is
 	constant tx_period : integer := 4; -- Shortest Period of All Signals
 	
 -- Sample and Accumulate Constants
-	constant x1_shift : std_logic_vector(2 downto 0) := "010";
-	constant x2_shift : std_logic_vector(2 downto 0) := "010";
-	constant x3_shift : std_logic_vector(2 downto 0) := "010";
-	constant x4_shift : std_logic_vector(2 downto 0) := "010";
 	constant X1SKIP : boolean := false;
 	constant X2SKIP : boolean := false;
 	constant X3SKIP : boolean := false;
@@ -133,7 +132,6 @@ architecture behavior of main is
 		: boolean := false;
 	signal adc_data : std_logic_vector(17 downto 0);
 	signal adc_sel : std_logic_vector(1 downto 0);
-	signal adc_shift : std_logic_vector(2 downto 0);
 
 -- Message Transmission. The syn_keep and nomerge reduce code size slightly.
 	signal TXI, -- Transmit Initiate
@@ -336,7 +334,7 @@ end process;
 -- skip flag is clear. The controller latches the state of the four skip
 -- flags when it is idle. The latching of these flags is essential. If we
 -- do not latch them, the firmware will freeze occasionally on RESET.
--- The controller sets adc_sel and adc_shift to match each ADC in turn.
+-- The controller sets adc_sel to match each ADC in turn.
 Sample_Controller : process (FCK) is
     variable state, next_state : integer range 0 to 5 := 0;
     variable adc_index : integer range 0 to 3 := 0;
@@ -382,19 +380,15 @@ begin
 		case adc_index is
             when 0 =>
                 adc_sel <= x1_sel;
-                adc_shift <= x1_shift;
                 skip_adc := X1SKIPL;
             when 1 =>
                 adc_sel <= x2_sel;
-                adc_shift <= x2_shift;
                 skip_adc := X2SKIPL;
             when 2 =>
                 adc_sel <= x3_sel;
-                adc_shift <= x3_shift;
                 skip_adc := X3SKIPL;
             when others =>
                 adc_sel <= x4_sel;
-                adc_shift <= x4_shift;
                 skip_adc := X4SKIPL;
         end case;
 
@@ -402,8 +396,7 @@ begin
             when sc_idle =>
                 adc_index := 0;
                 adc_sel <= x1_sel;
-                adc_shift <= x1_shift;
-
+ 
                 if SCRQ xor SCACK then
                     next_state := sc_check;
                 else
@@ -438,11 +431,9 @@ begin
                 end if;
             when sc_done =>
                 adc_sel <= x4_sel;
-                adc_shift <= x4_shift;
                 next_state := sc_wait;
             when others =>
                 adc_sel <= x4_sel;
-                adc_shift <= x4_shift;
                 next_state := sc_wait;
         end case;
 
@@ -469,7 +460,24 @@ ADC_Controller : process (RESET, FCK) is
     variable state, next_state : integer range 0 to 63 := 0;
     constant calib_end : integer := 50;
     constant read_end : integer := 40;
+	variable adc_shift : integer := 0;
 begin
+	-- Calculate the number of left shifts we should apply to each ADC
+	-- sample before storing in the sample memory.
+	if (tx_period = 1) then
+		adc_shift := 0;
+	elsif (tx_period = 2) then
+		adc_shift := 1;
+	elsif (tx_period = 4) then
+		adc_shift := 2;
+	elsif (tx_period = 8) then
+		adc_shift := 3;
+	elsif (tx_period = 16) then
+		adc_shift := 4;
+	else
+		adc_shift := 0;
+	end if;
+
     -- Upon startup, make sure we are in the idle state.
     if (RESET = '1') then
         state := 0;
@@ -514,10 +522,10 @@ begin
             end if;
 
             -- Programmable left shift, zero to four places.
-            if ((state = 32) and (unsigned(adc_shift) >= 1))
-                or ((state = 34) and (unsigned(adc_shift) >= 2))
-                or ((state = 36) and (unsigned(adc_shift) >= 3))
-                or ((state = 38) and (unsigned(adc_shift) >= 4)) then
+            if ((state = 32) and (adc_shift >= 1))
+                or ((state = 34) and (adc_shift >= 2))
+                or ((state = 36) and (adc_shift >= 3))
+                or ((state = 38) and (adc_shift >= 4)) then
                 adc_data(17 downto 1) <= adc_data(16 downto 0);
                 adc_data(0) <= '0';
             end if;
