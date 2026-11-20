@@ -10,12 +10,11 @@
 -- contact with the accelerometer, non-volatile memory, or temperature 
 -- sensor yet supported. Re-work state machines to reduce logic footprint 
 -- while testing that we have four inputs being digitized, accumulated, 
--- and transmitted. Code fully-functional, 238 LUTs. Because we are not
+-- and transmitted. Code fully-functional, 237 LUTs. Because we are not
 -- putting the thermometer to sleep, current consumption keeps jumping
--- up to 200 uA.
-
--- V2.2 [20-NOV-26] All ADCs have same shift and sample rate, but each
--- can be disabled. Channel numbers are sequential
+-- up to 200 uA. All ADCs have same shift and sample rate, but each
+-- can be disabled. Tag and commit, but see no way to fit I2C function
+-- into 256 LUTs.
 
 library ieee;  
 use ieee.std_logic_1164.all;
