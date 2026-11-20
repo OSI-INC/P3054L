@@ -1,8 +1,0 @@
-#Start recording tcl command: 11/20/2026 14:35:28
-#Project Location: C:/Kevan/A3054/P3054L; Project name: P3054L
-prj_project open "C:/Kevan/A3054/P3054L/P3054L.ldf"
-prj_run Synthesis -impl impl1
-prj_run Synthesis -impl impl1
-prj_run Synthesis -impl impl1
-prj_run Synthesis -impl impl1
-#Stop recording: 11/20/2026 14:42:40

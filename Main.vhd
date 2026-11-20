@@ -1,8 +1,8 @@
--- A3054L Long-Life IPT Firmware, Top-Level Unit
+-- A3054M Miniature IPT Firmware, Top-Level Unit
 
 -- V2.0 [18-NOV-26] Based upon P3054 V1.9. Creating long-life version. 
 
--- V2.1 [19-NOV-26] Remove all EBR use, remove OSR8, interrupt timer, 
+-- V2.1 [18-NOV-26] Remove all EBR use, remove OSR8, interrupt timer, 
 -- memory management unit. Create Telemetry dispatcher to pass sample 
 -- memory values to the Message Transmitter and clear the sample memory 
 -- afterwards. With all four analog inputs being sampled, accumulated 
@@ -15,6 +15,11 @@
 -- up to 200 uA. All ADCs have same shift and sample rate, but each
 -- can be disabled. Tag and commit, but see no way to fit I2C function
 -- into 256 LUTs.
+
+-- V2.2 [19-NOV-26] Rename as A3054M for Minature. This code will run in
+-- only 237 LUTs. But it won't work for the A3054L Long-Life IPT, which
+-- needs I2C access.
+
 
 library ieee;  
 use ieee.std_logic_1164.all;
@@ -55,7 +60,7 @@ entity main is
 	
 -- Configuration of the Telemetry Manager
 	constant TMRUN : boolean := true; -- Run the Telemetry Protocol
-	constant tx_period : integer := 4; -- Shortest Period of All Signals
+	constant tx_period : integer := 8; -- Shortest Period of All Signals
 	
 -- Sample and Accumulate Constants
 	constant X1SKIP : boolean := false;
@@ -67,9 +72,9 @@ entity main is
 	constant x3_sel : std_logic_vector(1 downto 0) := "10";
 	constant x4_sel : std_logic_vector(1 downto 0) := "11";
 	constant x1_channel : integer := 1;
-	constant x2_channel : integer := 2;
-	constant x3_channel : integer := 3;
-	constant x4_channel : integer := 4;	
+	constant x2_channel : integer := 18;
+	constant x3_channel : integer := 35;
+	constant x4_channel : integer := 52;	
 end;
 
 architecture behavior of main is
@@ -464,15 +469,15 @@ begin
 	-- Calculate the number of left shifts we should apply to each ADC
 	-- sample before storing in the sample memory.
 	if (tx_period = 1) then
-		adc_shift := 0;
+		adc_shift := 4;
 	elsif (tx_period = 2) then
-		adc_shift := 1;
+		adc_shift := 3;
 	elsif (tx_period = 4) then
 		adc_shift := 2;
 	elsif (tx_period = 8) then
-		adc_shift := 3;
+		adc_shift := 1;
 	elsif (tx_period = 16) then
-		adc_shift := 4;
+		adc_shift := 0;
 	else
 		adc_shift := 0;
 	end if;
