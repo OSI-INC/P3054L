@@ -1,14 +1,18 @@
 -- A3054L Long-Life IPT Firmware, Top-Level Unit
 
--- V2.0 [19-NOV-26] Based upon P3054 V1.9. Creating long-life version. Remove
--- all EBR use, remove OSR8, interrupt timer, memory management unit. Create
--- Telemetry dispatcher to pass sample memory values to the Message Transmitter
--- and clear the sample memory afterwards. With all four analog inputs being
--- sampled, accumulated four times, and transmitted at 256 SPS, logic consumes
--- 232 LUTs. No contact with the accelerometer, non-volatile memory, or
--- temperature sensor yet supported. Re-work state machines to reduce logic
--- footprint while testing that we have four inputs being digitized, accumulated,
--- and transmitted. Code fully-functional, 238 LUTs.
+-- V2.0 [18-NOV-26] Based upon P3054 V1.9. Creating long-life version. 
+
+-- V2.1 [19-NOV-26] Remove all EBR use, remove OSR8, interrupt timer, 
+-- memory management unit. Create Telemetry dispatcher to pass sample 
+-- memory values to the Message Transmitter and clear the sample memory 
+-- afterwards. With all four analog inputs being sampled, accumulated 
+-- four times, and transmitted at 256 SPS, logic consumes 232 LUTs. No 
+-- contact with the accelerometer, non-volatile memory, or temperature 
+-- sensor yet supported. Re-work state machines to reduce logic footprint 
+-- while testing that we have four inputs being digitized, accumulated, 
+-- and transmitted. Code fully-functional, 238 LUTs. Because we are not
+-- putting the thermometer to sleep, current consumption keeps jumping
+-- up to 200 uA.
 
 library ieee;  
 use ieee.std_logic_1164.all;
