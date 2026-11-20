@@ -19,7 +19,7 @@
 				<BScanLen>1</BScanLen>
 				<BScanVal>0</BScanVal>
 			</Bypass>
-			<File>C:/Kevan/A3054/P3054L/impl1/P3054L_impl1.jed</File>
+			<File>C:/Kevan/A3054/P3054M/impl1/P3054L_impl1.jed</File>
 			<FileTime>11/19/26 15:03:28</FileTime>
 			<JedecChecksum>0x340E</JedecChecksum>
 			<Operation>FLASH Erase,Program,Verify</Operation>
