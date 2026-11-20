@@ -18,7 +18,9 @@
 
 -- V2.2 [19-NOV-26] Rename as A3054M for Minature. This code will run in
 -- only 237 LUTs. But it won't work for the A3054L Long-Life IPT, which
--- needs I2C access.
+-- needs I2C access. This code does not support turning off transmission
+-- of any of the four telemetry signals: they will all transmit, but we
+-- can turn off sampling of the signals with some flags.
 
 
 library ieee;  
@@ -51,7 +53,7 @@ entity main is
 -- Configuration of the Ring Oscillator
 	constant fck_num_feeds : integer := 8;
 	constant fck_num_gates : integer := 24;
-	constant fck_mask : std_logic_vector(fck_num_feeds-1 downto 0) := "00100000";
+	constant fck_mask : std_logic_vector(fck_num_feeds-1 downto 0) := "01000000";
 
 -- Configuration and Calibration of Transmitter.
 	constant tx_channel_default : integer := 1;
