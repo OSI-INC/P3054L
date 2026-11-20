@@ -19,9 +19,9 @@
 				<BScanLen>1</BScanLen>
 				<BScanVal>0</BScanVal>
 			</Bypass>
-			<File>C:/Kevan/A3054/P3054/impl1/P3054_impl1.jed</File>
-			<FileTime>03/31/26 14:50:14</FileTime>
-			<JedecChecksum>0x2278</JedecChecksum>
+			<File>C:/Kevan/A3054/P3054L/impl1/P3054L_impl1.jed</File>
+			<FileTime>11/19/26 15:03:28</FileTime>
+			<JedecChecksum>0x340E</JedecChecksum>
 			<Operation>FLASH Erase,Program,Verify</Operation>
 			<Option>
 				<SVFVendor>JTAG STANDARD</SVFVendor>
@@ -42,14 +42,13 @@
 		<StartTAP>TLR</StartTAP>
 		<EndTAP>TLR</EndTAP>
 		<VerifyUsercode value="FALSE"/>
-		<TCKDelay>1</TCKDelay>
+		<TCKDelay>4</TCKDelay>
 	</ProjectOptions>
 	<CableOptions>
 		<CableName>USB2</CableName>
 		<PortAdd>FTUSB-0</PortAdd>
 		<USBID>Lattice HW-USBN-2B Ch A Location 0000 Serial VER00001A</USBID>
 		<JTAGPinSetting>
-			TRST	ABSENT;
 			ISPEN	HIGH;
 		</JTAGPinSetting>
 		<ISPENConnect value="TRUE"/>
