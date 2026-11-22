@@ -1,4 +1,4 @@
--- A3054M Miniature IPT Firmware, Top-Level Unit
+-- A3054L Long-Life IPT Firmware, Top-Level Unit
 
 -- V2.0 [18-NOV-26] Based upon P3054 V1.9. Creating long-life version. 
 
@@ -16,11 +16,8 @@
 -- can be disabled. Tag and commit, but see no way to fit I2C function
 -- into 256 LUTs.
 
--- V2.2 [19-NOV-26] Rename as A3054M for Minature. This code will run in
--- only 237 LUTs. But it won't work for the A3054L Long-Life IPT, which
--- needs I2C access. This code does not support turning off transmission
--- of any of the four telemetry signals: they will all transmit, but we
--- can turn off sampling of the signals with some flags.
+-- V2.2 [22-NOV-26] Our objective now is to fit fully-functional code
+-- into 640 LUTs with 2 EBR, as in the LXMCO2-640ZE.
 
 
 library ieee;  
@@ -580,10 +577,9 @@ begin
 end process;
 
 -- The Telemetry Dispatcher runs off FCK and is reset by TDRST.
--- It transmits four channels in sequence, clearing each
--- accumulator after transmission.
--- The channel index replaces four separate copies of the
--- transmit, wait, and clear state sequences.
+-- It transmits four channels in sequence, clearing each accumulator 
+-- after transmission. The channel index replaces four separate copies 
+-- of the transmit, wait, and clear state sequences.
 Telemetry_Dispatcher : process (RESET, FCK) is
     variable state, next_state : integer range 0 to 5 := 0;
     variable channel_index : integer range 0 to 3 := 0;
@@ -805,10 +801,12 @@ end process;
 			-- the modulation frequency to go from high to low on the falling edge of
 			-- TCK.
 			elsif (TXB xor (TCK = '1')) then
-				xdac <= std_logic_vector(to_unsigned(frequency_low + frequency_step,5));
+				xdac <= std_logic_vector(to_unsigned(
+					frequency_low + frequency_step,5));
 				FHI <= true;
 			else
-				xdac <= std_logic_vector(to_unsigned(frequency_low,5));
+				xdac <= std_logic_vector(to_unsigned(
+					frequency_low,5));
 				FHI <= false;
 			end if;
 		end if;
