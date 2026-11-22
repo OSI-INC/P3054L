@@ -17,7 +17,8 @@
 -- into 256 LUTs.
 
 -- V2.2 [22-NOV-26] Our objective now is to fit fully-functional code
--- into 640 LUTs with 2 EBR, as in the LXMCO2-640ZE.
+-- into 640 LUTs with 2 EBR, as in the LXMCO2-640ZE. Increase length of
+-- ring oscillator. Flash LED during power-up sequence.
 
 
 library ieee;  
@@ -49,8 +50,8 @@ entity main is
 		: out std_logic_vector(4 downto 0));
 -- Configuration of the Ring Oscillator
 	constant fck_num_feeds : integer := 8;
-	constant fck_num_gates : integer := 24;
-	constant fck_mask : std_logic_vector(fck_num_feeds-1 downto 0) := "01000000";
+	constant fck_num_gates : integer := 29;
+	constant fck_mask : std_logic_vector(fck_num_feeds-1 downto 0) := "00010000";
 
 -- Configuration and Calibration of Transmitter.
 	constant tx_channel_default : integer := 1;
@@ -188,6 +189,7 @@ begin
 			USERSTDBY <= to_std_logic(state >= stdby_state);
 			RESET <= to_std_logic((state < end_state) or SWRST);
 			LV <= to_std_logic(state = end_state);
+			LED <= to_std_logic(state < end_state);
 			
 			if (state < stdby_state) then state := state + 1;
 			elsif (SFLAG = '0') then state := stdby_state;
@@ -196,8 +198,8 @@ begin
 		end if;
 	end process;	
 
--- The Fast Clock process produces FCK when one of several flags are asserted.
--- The ring oscillator should be calibrated so that it produces FCK of 10 MHz.
+-- The Fast Clock entity produces FCK. The ring oscillator should be 
+-- calibrated so that it produces FCK of 10 MHz.
 	FCKEN <= to_std_logic(ENFCKTM);
 	Fast_Clock : entity ring_oscillator 
 		generic map (
@@ -231,7 +233,8 @@ begin
 -- sampling. The manager enables FCK when SCRQ and SCACK are not equal. 
 -- This interaction between two processes, one running on RCK and one on 
 -- FCK works provided that the Sample Controller runs on the rising edge 
--- of FCK and toggles SCACK on the falling edge. 
+-- of FCK and toggles SCACK on the falling edge. We use the same toggle
+-- handshake between the manager and the Telemetry Dispatcher.
 Telemetry_Manager : process (RCK) is
     constant tm_max : integer := 31;
     constant tm_idle : integer := tm_max;
