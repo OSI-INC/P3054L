@@ -219,7 +219,7 @@ begin
 		SFLAG => SFLAG);	
 
 -- The Power-Up Process. We have CLRFLAG and USERSTDBY cleared LO on power-up,
--- and RESET set HI. When RCK starts up, we us the falling edge to move the 
+-- and RESET set HI. When RCK starts up, we use the falling edge to move the 
 -- chip into standby mode, then unassert RESET once we receive SFLAG from the
 -- Power Control Unit (PCU).
 	PowerUp: process (RCK) is
@@ -361,7 +361,7 @@ begin
 -- the sum of up to sixteen of fourteen-bit ADC samples. The 
 -- sample memory runs off the fast clock(FCK) to work well with 
 -- the Sample Controller and the Telemetry Dispatcher, which also
--- run on , which also run on FCK.
+-- run on FCK.
 	Sample_Memory : entity SMRAM port map (
 		Clock => not FCK,
 		ClockEn => '1',
@@ -753,7 +753,7 @@ begin
 		variable cc_bits : std_logic_vector(3 downto 0);
 		variable state, next_state : integer range 0 to 63; -- Stample Transmit State
 	begin
-		-- The channel number, set number, and comletion code are a function of the 
+		-- The channel number, set number, and completion code are a function of the 
 		-- device id and the channel offset, which we calculate here.
 		channel_num := tx_channel mod 16;
 		set_num := tx_channel / 16;
