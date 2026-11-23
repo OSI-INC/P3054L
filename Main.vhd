@@ -89,9 +89,9 @@ entity main is
 	constant x3_shift : integer := 1;
 	constant x4_shift : integer := 0;
 	constant x1_channel : integer := 1;
-	constant x2_channel : integer := 18;
-	constant x3_channel : integer := 35;
-	constant x4_channel : integer := 52;	
+	constant x2_channel : integer := 3;
+	constant x3_channel : integer := 5;
+	constant x4_channel : integer := 7;	
 end;
 
 architecture behavior of main is
@@ -176,7 +176,6 @@ architecture behavior of main is
 		RCMD, -- Receive Command
 		RBI, -- Receive Command Byte Initiate
 		RBD, -- Receive Command Byte Done
-		BYTERR, -- Byte Error
 		CRCERR, -- Checksum Error
 		BYTS, -- Command Byte Strobe
 		CBS -- Command Bit Strobe (CBS)
@@ -193,8 +192,7 @@ architecture behavior of main is
 		: std_logic; 
 
 -- Command Processor
-	signal CPA, -- Command Processor Active
-		CPRST -- Command Processor Reset
+	signal CPA -- Command Processor Active
 		: boolean := false;
 	signal target_id_hi : std_logic_vector(7 downto 0);
 	
@@ -271,7 +269,9 @@ begin
 	Millisecond_Clock : process (RCK) is
 		variable mcnt : integer range 0 to 31;
 	begin
-		if falling_edge(RCK) then
+		if RESET = '1' then
+			mcnt := 0;
+		elsif falling_edge(RCK) then
 			mcnt := mcnt + 1;
 			if (mcnt <= 15) then
 				MCK <= '0';
@@ -311,9 +311,11 @@ begin
 			TDRQ <= false;
 			TMCK <= false;
 			state := tm_idle;
+			tx_index := 0;
 		elsif rising_edge(RCK) then
 			if not TMRUN then
 				next_state := tm_idle;
+				tx_index := 0;
 			else
 				if state = tm_idle then
 					next_state := 0;
@@ -369,11 +371,9 @@ begin
 		Q => smem_data);
 	
 -- The Sample Memory Address Multiplexer sets the sample memory 
--- address equal to adc_sel when the ADC Controller is busy, and
--- sample_sel otherwise. The former is incremented by the Sample 
--- Controller as it steps through the ADCs performing samples. The
--- latter is set by the CPU with a write to the sample memory
--- address register.
+-- address equal to adc_sel when the Sample Controller is busy, 
+-- and sample_sel otherwise. The former is incremented by the 
+-- Sample Controller.
 	Sample_Addr_Mux : process (all) is 
 	begin
 		if SCBSY then
@@ -383,9 +383,9 @@ begin
 		end if;
 	end process;
 		
--- The Sample Accumulator adds newly-acquired ADC samples, which have
--- been shifted left from zero to four places, to an existing eighteen
--- bit sample memory value.
+-- The Sample Accumulator adds newly-acquired ADC samples, which 
+-- have been shifted left from zero to four places, to an existing 
+-- eighteen bit sample memory value.
 	Sample_Accumulator : entity SMADD port map (
 		DataA => adc_data,
 		DataB => smem_data,
@@ -757,7 +757,7 @@ begin
 		-- device id and the channel offset, which we calculate here.
 		channel_num := tx_channel mod 16;
 		set_num := tx_channel / 16;
-		completion_code := 15 - channel_num + set_num;
+		completion_code := (15 - channel_num + set_num) mod 16;
 		channel_bits := std_logic_vector(to_unsigned(channel_num,4));
 		cc_bits := std_logic_vector(to_unsigned(completion_code,4));
 		
@@ -934,14 +934,20 @@ begin
 	end process;
 
 -- We watch for a start bit and receive serial bytes when instructed
--- to do so by the Command Processor with the RBI signal.
+-- to do so by the Command Processor with the RBI signal. The command
+-- bytes arrive at 8192 bps. We use RCK, which is 32.768 kHz to detect
+-- the rising edge of a start bit and then sample the center of the
+-- subsequent bits to obtain a byte.
 	Byte_Receiver: process (RESET, RCK) is
-		variable state, next_state : integer range 0 to 63;
-		variable no_stop_bit : boolean;
+		constant end_state : integer := 39;
+		variable state, next_state : integer range 0 to end_state;
 	begin
 		if RESET = '1' then
 			state := 0;
+			RBD <= false;
 		elsif rising_edge(RCK) then
+			-- By default, go to the idle state.
+			next_state := 0;
 		
 			-- Idle state, waiting for Receive Byte Initiate.
 			if (state = 0) then
@@ -954,11 +960,9 @@ begin
 			
 			-- Wait for a start bit. If we wait long enough, we will see the 
 			-- termination signal, in which case we abort and wait for not RPI.
-			-- We clear no stop bit variable, which clears the global BYTERR 
-			-- signal.
 			if (state = 1) then
 				if TCMD then 
-					next_state := 63; 
+					next_state := end_state; 
 				else 
 					if RPS then 
 						next_state := 2;
@@ -966,9 +970,7 @@ begin
 						next_state := 1; 
 					end if;
 				end if;
-				no_stop_bit := false;
 			end if;
-			BYTERR <= no_stop_bit;
 			
 			-- Once we have a start bit, we proceed through the eight bits of
 			-- a command byte, each bit taking four states. The first bit occurs
@@ -976,51 +978,19 @@ begin
 			if (state >= 2) and (state <= 38) then 
 				next_state := state + 1; 
 			end if;
-			
-			-- If the stop bit is present, we go to our end state. If it's missing,
-			-- we go to our byte error state. The stop bit is zero, so RPS should 
-			-- at this point be false.
-			if (state = 39) then
-				if not RPS then 
-					next_state := 63;
-				else 
-					next_state := 62;
-				end if;
-			end if;
-			
-			-- Here we deal with unused states by directing them towards the byte
-			-- error state.
-			if (state > 39) and (state < 62) then 
-				next_state := 62; 
-			end if;
-			
-			-- In the byte error state, we set the "no stop bit" flag, which asserts the 
-			-- global BYTERR signal. We will not reset this flag until the Byte Receiver
-			-- starts a new byte reception. This flag tells the Command Processor to ignore
-			-- the entire command. We wait in the byte error state until RBI is unasserted. 
-			-- Because we do not assert RBD, the un-assertion of RBI will occur only when
-			-- the Command Receiver encounters a Terminate Command signal.
-			if (state = 62) then
-				if not RBI then 
-					next_state := 0;
-				else 
-					next_state := 62;
-				end if;
-				no_stop_bit := true;
-			end if;
-			
-			-- In the end state, we assert Receive Byte Done and we wait for the command
-			-- processor to un-assert Receive Byte Initiate. When we see not RBI, we return
-			-- to the idle state and unassert RBD. When we see Terminate Command (TCMD) we
-			-- unassert RBD.
-			if (state = 63) then 
+
+			-- In the end state, we assert Receive Byte Done and we wait for the 
+			-- command processor to un-assert Receive Byte Initiate. When we see not 
+			-- RBI, we return to the idle state and unassert RBD. When we see 
+			-- Terminate Command (TCMD) we unassert RBD.
+			if (state = end_state) then 
 				if not RBI then 
 					next_state := 0; 
 				else 
-					next_state := 63; 
+					next_state := end_state; 
 				end if;
 			end if;
-			RBD <= (state = 63) and (not TCMD);
+			RBD <= (state = end_state) and (not TCMD);
 					
 			-- The eight bits of the command are set every four states during
 			-- the command reception.
@@ -1031,8 +1001,6 @@ begin
 					else 
 						cmd_in(i) <= '0'; 
 					end if;
-				else 
-					cmd_in(i) <= cmd_in(i); 
 				end if;
 			end loop;
 			
@@ -1048,10 +1016,11 @@ begin
 			-- The Byte Strobe signal indicates that we have a start bit and is 
 			-- useful as a test point trigger. It provides a pulse of two RCK 
 			-- periods.
-			BYTS <= (state = 2) or (state = 3);
-			
+			BYTS <= (state = 2) or (state = 3);	
+
 			-- Assert the new state.
 			state := next_state;
+			
 		end if;
 	end process;
 
@@ -1103,7 +1072,13 @@ begin
 -- enabled by CMWR and reads are enabled by CMRD. We use separate edges because this is,
 -- in experience, safer when operating EBR buffers. We use the falling edge for reading
 -- because doing so simplifies the Command Processor: if we assert CMRD in one processor
--- state, the byte read will be available for testing in the next state.
+-- state, the byte read will be available for testing in the next state. We configure
+-- the FIFO so that its AlmostEmpty flag is asserted when there are two or fewer bytes
+-- left in the buffer. Thus, when we have no more instruction bytes left, and only the
+-- two CRC bytes, the Command Memory Empty (CME) flag will be asserted by AlmostEmpty
+-- and we will stop processing the command. The Full flag is asserted when the buffer
+-- is a few bytes from full, so Command Memory Full (CMF) indicates an overflow and
+-- is cause for aborting processing.
 	Command_Memory : entity CMD_FIFO port map (
 		Reset => CMRST, 
 		RPReset => '0',
@@ -1129,11 +1104,10 @@ begin
 		constant check_fifo_s : integer := 3;
 		constant check_cmd_s : integer := 4;
 		constant read_id_hi_s : integer := 5;
-		constant read_id_lo_s : integer := 6;
-		constant check_id_s : integer := 7;
-		constant check_empty_s : integer := 8;
-		constant interpret_opcode_s : integer := 9;
-		constant set_fck_mask_s : integer := 10;
+		constant check_id_s : integer := 6;
+		constant check_empty_s : integer := 7;
+		constant interpret_opcode_s : integer := 8;
+		constant set_fck_mask_s : integer := 9;
 		
 		-- Variables and constants for the Command Processor
 		variable state, next_state : integer range 0 to 15;
@@ -1200,13 +1174,13 @@ begin
 				end if;
 			end if;		
 			
-			-- There are three possible sources of error: a failure in the cyclic 
-			-- redundancy check (CRCERR), a missing stop bit (BYTERR), or an empty
-			-- command (CME). If any of these are asserted, we go back to idle and 
-			-- discard the command. Whether the command is valid or not, we assert
-			-- CMRD to clock the first byte out of the command memory FIFO. 
+			-- There are two possible sources of error: a failure in the cyclic 
+			-- redundancy check (CRCERR) or an empty command memory (CME). If 
+			-- either of these are asserted, we go back to idle and discard the 
+			-- command. Whether the command is valid or not, we assert CMRD to clock 
+			-- the first byte out of the command memory FIFO. 
 			if (state = check_cmd_s) then
-				if BYTERR or CRCERR or (CME = '1') then 
+				if CRCERR or (CME = '1') then 
 					next_state := idle_s;
 				else 
 					next_state := read_id_hi_s;
