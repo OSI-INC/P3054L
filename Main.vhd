@@ -20,8 +20,9 @@
 -- into 640 LUTs with 2 EBR, as in the LXMCO2-640ZE. Increase length of
 -- ring oscillator. Flash LED during power-up sequence.
 
--- V2.3 [22-NOV-26] Adding in the command receiver with a solitary 
--- command to adjust the fast clock mask.
+-- V2.3 [23-NOV-26] Add command receiver from P3054P. Expand Command -- Processor to read and execute op-codes. Add temporary instruction 
+-- to set fck_mask. Work on routing priorities and no-merge directives.
+-- Hard-code individual transmit periods and shifts. Update comments.
 
 
 library ieee;  
@@ -280,21 +281,21 @@ begin
 		end if;	
 	end process;
 		
--- The Telemetry Manager organizes sampling of the inputs X1-X4 at
--- frequency that is an integer fraction of 1024 SPS and generates
--- the transmit interrupt offset from sampling by a random number
--- of RCK periods. The manager runs off RCK, but the Sample
--- Controller and Telemetry Dispatcher that it manages run off
--- FCK. In the manager's sample state, the manager unasserts Sample
--- Controller Reset (SCRST) so that the Sample Controller can come out 
--- of reset on the next rising edge of FCK. The manager also toggles 
--- Sample Controller Request (SCRQ) so as to request that FCK start up.
--- The Sample Controller will set SCACK equal to SCRQ when it has finished 
--- sampling. The manager enables FCK when SCRQ and SCACK are not equal. 
--- This interaction between two processes, one running on RCK and one on 
--- FCK works provided that the Sample Controller runs on the rising edge 
--- of FCK and toggles SCACK on the falling edge. We use the same toggle
--- handshake between the manager and the Telemetry Dispatcher.
+-- The Telemetry Manager starts the Sample Controller regularly at 1024 Hz
+-- and starts the Telemetry Dispatcher irregularly at 1024 Hz / tx_period,
+-- where tx_period must be 1, 2, 4, 8, or 16. The Sample Controller will 
+-- sample, shift, and store all enabled intputs. The Telemetry Dispatcher 
+-- will transmit all enabled inputs. We say "irregularly" because the 
+-- moment the dispatcher is started is shifted within the 1024 Hz period 
+-- by 0-15 RCK periods so as to produce "transmission scatter", which is 
+-- a requirement of our telemetry protocol. The Telemetry Manager runs off
+-- RCK but the Sample Controller and the Telemetry Dispatcher run off 
+-- FCK. Furthermore, the Telemetry Manager turns on FCK for these processes.
+-- To perform the control of FCK we use toggle hand-shakes. We have SCRQ and
+-- SCACK for the Sample Controller and TDRQ and TDACK for the Telemetry
+-- Dispatcher. The signals are toggled rather than set, and their equality
+-- turns on FCK. We also have SCRST and TDRST to reset the controller and
+-- dispatcher.
 	Telemetry_Manager : process (RCK) is
 		constant tm_max : integer := 31;
 		constant tm_idle : integer := tm_max;
@@ -396,12 +397,15 @@ begin
 
 -- The Sample Controller organizes sampling of all four inputs X1-X4 using
 -- the four converters ADC1-ADC4. It runs off FCK. It starts running when
--- it sees the ACRUN flag set. It will not return to its idle state until
--- this flag is cleared. It obtains a sample from each ADC for which the
--- skip flag is clear. The controller latches the state of the four skip
--- flags when it is idle. The latching of these flags is essential. If we
--- do not latch them, the firmware will freeze occasionally on RESET.
--- The controller sets adc_sel to match each ADC in turn.
+-- it SCRST is unasserted and FCK is running. It will not return to its idle 
+-- state until SCRST is asserted again. It indicates to the source of SCRST
+-- that it has completed its sampling by toggling the SCACK signal. The 
+-- controller obtains a sample from each ADC for which the skip flag is 
+-- clear. It latches the state of the four skip flags when it is idle or else
+-- the firmware will freeze occasionally on RESET. The controller sets adc_sel 
+-- and adc_shift to match each ADC in turn. The controller does not perform
+-- the sampling itself, but instead uses the ADC Reader to read out the
+-- ADC and initiate another conversion.
 	Sample_Controller : process (FCK) is
 		variable state, next_state : integer range 0 to 5 := 0;
 		variable adc_index : integer range 0 to 3 := 0;
@@ -509,21 +513,20 @@ begin
 		end if;
 	end process;
 
--- ADC Controller starts reading one of the 14-bit ADCs when it detects 
+-- Sample Reader starts reading one of the 14-bit ADCs when it detects 
 -- ADC Read (ADCRD). It waits until ADCRD is unasserted before returning
--- to its rest state. When the controller has acquired the 14-bit sample,
+-- to its rest state. When the reader has acquired a 14-bit sample,
 -- it updates the transmit time shift value using a linear shift 
--- register that will, if the ADC is working properly, generate a random
--- number for transmit scatter. After that, the controller shifts 14-bit 
--- samples to the left from zero to four place, as directed by adc_shift. 
--- After shifting, the controller adds the sample to the accumulator, and 
--- writes the output of the accumulator to the sample memory. The ADC it 
--- selects for readout is the one specified by adc_sel. If ADCRD is 
--- accompanied by ADCCAL, the ADC Controller performs a calibration read 
--- of twenty-four bits, with no shifting, no accumulation, and no storage. 
--- This calibration read will cause the ADC to self-calibrate provided 
--- that the calibration access is the first one after power-up. 
-	ADC_Controller : process (RESET, FCK) is
+-- register that provides the transmit scatter random number needed by
+-- the Telemetry Manager. The reader shifts 14-bit sample to the left 
+-- from zero to four place, as directed by adc_shift. The reader adds
+-- sample to the accumulator, and writes the output of the accumulator to 
+-- the sample memory. If ADCRD is accompanied by ADCCAL, the reader 
+-- performs a calibration read of twenty-four bits, with no shifting, no 
+-- accumulation, and no storage. This calibration read will cause the 
+-- ADC to self-calibrate provided that the calibration access is the 
+-- first one after power-up. The Sample Reader runs off FCK.
+	Sample_Reader : process (RESET, FCK) is
 		variable state, next_state : integer range 0 to 63 := 0;
 		constant calib_end : integer := 50;
 		constant read_end : integer := 40;
@@ -547,9 +550,9 @@ begin
 			adc_data <= (others => '0');
 			transmit_shift <= (others => '1');
 
-		-- The ADC Controller initiates a conversion and reads
-		-- one zero, fourteen data bits, and three trailing zeros.
-		-- Calibration reads have nine trailing zeros instead.
+		-- The reader initiates a conversion and reads one zero, 
+		-- fourteen data bits, and three trailing zeros. Calibration 
+		-- reads have nine trailing zeros instead.
 		elsif falling_edge(FCK) then
 
 			-- Shared state-counter logic.
@@ -591,8 +594,7 @@ begin
 				end if;
 			end if;
 
-			-- Shared SCK generation for normal and
-			-- calibration reads.
+			-- Shared SCK generation for normal and calibration reads.
 			SCK <= to_std_logic(
 				(state = 0)
 				or (
@@ -625,18 +627,18 @@ begin
 			state := next_state;
 		end if;
 
-		-- Select the ADC using the top two bits
-		-- of the sample address.
+		-- Select the ADC using the top two bits of the sample address.
 		NADC1 <= to_std_logic(not (ADCBSY and (adc_sel = x1_sel)));
 		NADC2 <= to_std_logic(not (ADCBSY and (adc_sel = x2_sel)));
 		NADC3 <= to_std_logic(not (ADCBSY and (adc_sel = x3_sel)));
 		NADC4 <= to_std_logic(not (ADCBSY and (adc_sel = x4_sel)));
 	end process;
 
--- The Telemetry Dispatcher runs off FCK and is reset by TDRST.
--- It transmits four channels in sequence, clearing each accumulator 
--- after transmission. The channel index replaces four separate copies 
--- of the transmit, wait, and clear state sequences.
+-- The Telemetry Dispatcher runs off FCK and is reset by TDRST. It
+-- arranges for transmission of four values stored in the sample memory.
+-- It transmits four channels in sequence, ignoring the ADC disable-- flags. It ignores the individual transmit periods of the channels
+-- as well. This dispatcher is a place holder for a more sophisticated
+-- dispatcher coming later.
 	Telemetry_Dispatcher : process (RESET, FCK) is
 		variable state, next_state : integer range 0 to 5 := 0;
 		variable channel_index : integer range 0 to 3 := 0;
@@ -728,10 +730,7 @@ begin
 
 -- The Message Transmitter responds to Transmit Initiate (TXI) by turning on the 
 -- radio-frequency oscillator, reading sixteen bits from one of the sensors and
--- transmitting the bits. The process runs off TCK, so the CPU must assert ENFCK
--- for the process to run. The TXI signal will be asserted for one period of CK
--- following a CPU write to the TXI location. Further writes to the same location
--- will be ignored until the Message Transmitter returns to its idle state.
+-- transmitting the bits. The process runs off TCK, which is FCK divided by two,-- so FCK must be running.
 	Message_Transmitter : process (RESET, TCK) is
 		variable channel_num, set_num, completion_code : 
 			integer range 0 to 15; -- set number for data
