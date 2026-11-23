@@ -16,8 +16,8 @@ CoreRevision=5.8
 ModuleName=CMD_FIFO
 SourceFormat=VHDL
 ParameterFileVersion=1.0
-Date=11/22/2026
-Time=20:50:27
+Date=11/23/2026
+Time=10:17:57
 
 [Parameters]
 Verilog=0
@@ -41,7 +41,7 @@ PeAssert=2
 PeDeassert=12
 FullFlg=1
 PfMode=Static - Single Threshold
-PfAssert=1000
+PfAssert=1022
 PfDeassert=506
 Reset=Async
 Reset1=Sync
@@ -50,4 +50,4 @@ WDataCount=0
 EnECC=0
 
 [Command]
-cmd_line= -w -n CMD_FIFO -lang vhdl -synth lse -bus_exp 7 -bb -arch xo2c00 -type ebfifo -depth 1024 -width 8 -rwidth 8 -no_enable -pe 2 -pf 1000
+cmd_line= -w -n CMD_FIFO -lang vhdl -synth synplify -bus_exp 7 -bb -arch xo2c00 -type ebfifo -depth 1024 -width 8 -rwidth 8 -no_enable -pe 2 -pf 1022

@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<DiamondModule name="CMD_FIFO" module="FIFO_DC" VendorName="Lattice Semiconductor Corporation" generator="IPexpress" date="2026 11 22 20:50:31.074" version="5.8" type="Module" synthesis="lse" source_format="VHDL">
+<DiamondModule name="CMD_FIFO" module="CMD_FIFO" VendorName="Lattice Semiconductor Corporation" generator="IPexpress" date="2026 11 23 10:18:00.293" version="5.8" type="Module" synthesis="synplify" source_format="VHDL">
   <Package>
-		<File name="CMD_FIFO.lpc" type="lpc" modified="2026 11 22 20:50:27.657"/>
-		<File name="CMD_FIFO.vhd" type="top_level_vhdl" modified="2026 11 22 20:50:27.720"/>
-		<File name="CMD_FIFO_tmpl.vhd" type="template_vhdl" modified="2026 11 22 20:50:27.720"/>
-		<File name="tb_CMD_FIFO_tmpl.vhd" type="testbench_vhdl" modified="2026 11 22 20:50:27.735"/>
+		<File name="CMD_FIFO.lpc" type="lpc" modified="2026 11 23 10:17:57.501"/>
+		<File name="CMD_FIFO.vhd" type="top_level_vhdl" modified="2026 11 23 10:17:57.548"/>
+		<File name="CMD_FIFO_tmpl.vhd" type="template_vhdl" modified="2026 11 23 10:17:57.548"/>
+		<File name="tb_CMD_FIFO_tmpl.vhd" type="testbench_vhdl" modified="2026 11 23 10:17:57.563"/>
   </Package>
 </DiamondModule>

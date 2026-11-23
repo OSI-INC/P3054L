@@ -20,7 +20,7 @@
 -- into 640 LUTs with 2 EBR, as in the LXMCO2-640ZE. Increase length of
 -- ring oscillator. Flash LED during power-up sequence.
 
--- V2.3 [22-NOV-26] Adding in the command receiver with a solitar 
+-- V2.3 [22-NOV-26] Adding in the command receiver with a solitary 
 -- command to adjust the fast clock mask.
 
 
@@ -53,13 +53,13 @@ entity main is
 		: out std_logic_vector(4 downto 0));
 		
 -- Identifier.
-	constant device_id : std_logic_vector(15 downto 0) := "1010101001010101";
-	constant wildcard_id : std_logic_vector(15 downto 0) := (others => '1');
+	constant device_id : std_logic_vector(15 downto 0) := x"AA55";
+	constant wildcard_id : std_logic_vector(15 downto 0) := x"FFFF";
 -- Configuration of the Ring Oscillator
 	constant fck_num_feeds : integer := 8;
-	constant fck_num_gates : integer := 29;
+	constant fck_num_gates : integer := 26;
 	constant default_fck_mask : 
-		std_logic_vector(fck_num_feeds-1 downto 0) := "00010000";
+		std_logic_vector(fck_num_feeds-1 downto 0) := x"10";
 
 -- Configuration and Calibration of Transmitter.
 	constant tx_channel_default : integer := 1;
@@ -68,7 +68,7 @@ entity main is
 	
 -- Configuration of the Telemetry Manager
 	constant TMRUN : boolean := true; -- Run the Telemetry Protocol
-	constant tx_period : integer := 8; -- Shortest Period of All Signals
+	constant tx_period : integer := 2; -- Shortest Period of All Signals
 	
 -- Sample and Accumulate Constants
 	constant X1SKIP : boolean := false;
@@ -79,6 +79,14 @@ entity main is
 	constant x2_sel : std_logic_vector(1 downto 0) := "01";
 	constant x3_sel : std_logic_vector(1 downto 0) := "10";
 	constant x4_sel : std_logic_vector(1 downto 0) := "11";
+	constant x1_pd : integer := 1;
+	constant x2_pd : integer := 2;
+	constant x3_pd : integer := 4;
+	constant x4_pd : integer := 8;
+	constant x1_shift : integer := 4;
+	constant x2_shift : integer := 3;
+	constant x3_shift : integer := 1;
+	constant x4_shift : integer := 0;
 	constant x1_channel : integer := 1;
 	constant x2_channel : integer := 18;
 	constant x3_channel : integer := 35;
@@ -101,11 +109,13 @@ architecture behavior of main is
 	
 -- Ring Oscillator, Fast Clock, and Transmit Clock. We retain all these signals
 -- as nodes in the logic to stop the compiler from spreading them around, which
--- makes the ring oscillator period vary from one compile to the next.
+-- makes the ring oscillator period vary from one compile to the next. We want
+-- the compiler to preserve the fck_mask bits or else FCK period will not be
+-- always increasing with mask bit index.
 	signal TCK, FCK, MCK, FCKEN : std_logic;
-	attribute syn_keep of TCK, FCK, FCKEN : signal is true;
-	attribute nomerge of TCK, FCK, FCKEN : signal is ""; 
 	signal fck_mask : std_logic_vector(fck_num_feeds-1 downto 0);
+	attribute syn_keep of TCK, FCK, FCKEN, fck_mask : signal is true;
+	attribute nomerge of TCK, FCK, FCKEN, fck_mask : signal is ""; 
 
 -- Clock Control. 
 	signal ENFCKTM : boolean; -- Enable Fast Clock, from Telemetry Manager
@@ -182,9 +192,10 @@ architecture behavior of main is
 		: std_logic; 
 
 -- Command Processor
-	signal CPRST -- Command Processor Reset
+	signal CPA, -- Command Processor Active
+		CPRST -- Command Processor Reset
 		: boolean := false;
-	signal target_id : std_logic_vector(15 downto 0);
+	signal target_id_hi : std_logic_vector(7 downto 0);
 	
 -- Functions and Procedures	
 	function to_std_logic (v: boolean) return std_ulogic is
@@ -224,7 +235,7 @@ begin
 			RESET <= to_std_logic((state < end_state) or SWRST);
 			LV <= to_std_logic(state = end_state);
 			LED <= to_std_logic(state < end_state);
-			
+
 			if (state < stdby_state) then state := state + 1;
 			elsif (SFLAG = '0') then state := stdby_state;
 			elsif (state < end_state) then state := state + 1; 
@@ -344,9 +355,10 @@ begin
 	end process;
 
 -- The Sample Memory is eighteen bits wide so as to accommodate
--- the sum of up to sixteen fourteen-bit ADC samples. The sample 
--- memory runs off the fast clock to work well with the Sample 
--- Controller, which also runs on fast clock.
+-- the sum of up to sixteen of fourteen-bit ADC samples. The 
+-- sample memory runs off the fast clock(FCK) to work well with 
+-- the Sample Controller and the Telemetry Dispatcher, which also
+-- run on , which also run on FCK.
 	Sample_Memory : entity SMRAM port map (
 		Clock => not FCK,
 		ClockEn => '1',
@@ -517,21 +529,14 @@ begin
 		constant read_end : integer := 40;
 		variable adc_shift : integer := 0;
 	begin
-		-- Calculate the number of left shifts we should apply to each ADC
-		-- sample before storing in the sample memory.
-		if (tx_period = 1) then
-			adc_shift := 4;
-		elsif (tx_period = 2) then
-			adc_shift := 3;
-		elsif (tx_period = 4) then
-			adc_shift := 2;
-		elsif (tx_period = 8) then
-			adc_shift := 1;
-		elsif (tx_period = 16) then
-			adc_shift := 0;
-		else
-			adc_shift := 0;
-		end if;
+		-- Calculate the number of left shifts we should apply to the ADC
+		-- sample before passing it to the accumulator. 
+		case adc_sel is
+			when x1_sel => adc_shift := x1_shift;
+			when x2_sel => adc_shift := x2_shift;
+			when x3_sel => adc_shift := x3_shift;
+			when x4_sel => adc_shift := x4_shift;
+		end case;
 
 		-- Upon startup, make sure we are in the idle state.
 		if (RESET = '1') then
@@ -819,10 +824,9 @@ begin
 		end if;
 	end process;
 
--- With XEN we enable the VCO. We assert XEN while the Message Transmitter is active,
--- provided that the Command Processor is not receiving a command. We also turn on
--- the VCO when the CPU asserts Transmit Warmup (TXWP). 
-	XEN <= to_std_logic(TXA or TXWP);
+-- With XEN we enable the VCO. We assert XEN while Transmit Active (TXA) or 
+-- Transmit Warm-Up (TXWP), but only if not Command Processor Active (CPA).
+	XEN <= to_std_logic((not CPA) and (TXA or TXWP));
 			
 -- The Frequency Modulation process takes the transmit bit values provided by
 -- the Message Transmitter, turns them into a sequence of rising and falling
@@ -1092,14 +1096,19 @@ begin
 		
 		-- The CRCERR flag tells us when the CRC is not zero. It will be zero when it
 		-- has been reset by the two bytes of a correct checksum.
-		CRCERR <= (crc /= "0000000000000000");
+		CRCERR <= (crc /= x"0000");
 	end process;
 
--- Command Memory
+-- The Command Memory First-In First-Out (FIFO) Buffer. We clock bytes into the buffer
+-- on the rising edge of RCK and out of the buffer on the falling edge. Writes are 
+-- enabled by CMWR and reads are enabled by CMRD. We use separate edges because this is,
+-- in experience, safer when operating EBR buffers. We use the falling edge for reading
+-- because doing so simplifies the Command Processor: if we assert CMRD in one processor
+-- state, the byte read will be available for testing in the next state.
 	Command_Memory : entity CMD_FIFO port map (
 		Reset => CMRST, 
 		RPReset => '0',
-		WrClock => not RCK,
+		WrClock => RCK,
 		WrEn => CMWR,
 		Data => cmd_in,
 		RdClock => not RCK,
@@ -1145,6 +1154,7 @@ begin
 			RBI <= false;
 			CMWR <= '0';
 			CMRD <= '0';
+			MSR <= '0';
 		
 			-- Idle State.
 			if (state = idle_s) then
@@ -1194,39 +1204,38 @@ begin
 			-- There are three possible sources of error: a failure in the cyclic 
 			-- redundancy check (CRCERR), a missing stop bit (BYTERR), or an empty
 			-- command (CME). If any of these are asserted, we go back to idle and 
-			-- discard the command.
+			-- discard the command. Whether the command is valid or not, we assert
+			-- CMRD to clock the first byte out of the command memory FIFO. 
 			if (state = check_cmd_s) then
 				if BYTERR or CRCERR or (CME = '1') then 
 					next_state := idle_s;
 				else 
 					next_state := read_id_hi_s;
 				end if;
+				CMRD <= '1';
 			end if;
 
-			-- We have a complete command in memory, read the high byte of the 
-			-- command's target device identifier and bring the next byte forward.
+			-- The first byte out of the FIFO is the top byte of the target device
+			-- identifier. Save this so we can combine it with the low byte in the
+			-- next step. Clock the next byte out of the FIFO.
 			if (state = read_id_hi_s) then
-				next_state := read_id_lo_s;
-				CMRD <= '1';
-				target_id(15 downto 8) <= cmd_out;
-			end if;	
-
-			-- Read the low byte of the command's target device identifier and bring
-			-- the next byte forward.
-			if (state = read_id_lo_s) then
 				next_state := check_id_s;
+				target_id_hi <= cmd_out;
 				CMRD <= '1';
-				target_id(7 downto 0) <= cmd_out;
-			end if;
-
-			-- Check that the target identifier matches this device's identifier
-			-- or the wildcard.
+			end if;	
+			
+			-- Compare the target identifier with this device's identifier
+			-- and the wildcard. If it matches either, we will proceed to
+			-- decode the command. Otherwise, we return to the idle state.
 			if (state = check_id_s) then
-				if (target_id = device_id) or (target_id = wildcard_id) then
+				if (target_id_hi & cmd_out) = device_id then
+					next_state := check_empty_s;
+				elsif (target_id_hi & cmd_out) = wildcard_id then
 					next_state := check_empty_s;
 				else
 					next_state := idle_s;
 				end if;
+				CMRD <= '1';
 			end if;
 			
 			-- If the command FIFO is empty, we are done, so go back to idle.
@@ -1258,9 +1267,11 @@ begin
 			-- Advance the state variable.
 			state := next_state;
 		end if;
+		
+		CPA <= (state /= idle_s);
 	end process;
 
 	SDA <= '1';
 	SCL <= '1';
-	TP <= RP;
+	TP <= to_std_logic(CPA);
 end behavior;
