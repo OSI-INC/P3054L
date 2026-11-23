@@ -58,6 +58,8 @@ entity main is
 -- Configuration of the Ring Oscillator
 	constant fck_num_feeds : integer := 8;
 	constant fck_num_gates : integer := 29;
+	constant default_fck_mask : 
+		std_logic_vector(fck_num_feeds-1 downto 0) := "00010000";
 
 -- Configuration and Calibration of Transmitter.
 	constant tx_channel_default : integer := 1;
@@ -103,7 +105,7 @@ architecture behavior of main is
 	signal TCK, FCK, MCK, FCKEN : std_logic;
 	attribute syn_keep of TCK, FCK, FCKEN : signal is true;
 	attribute nomerge of TCK, FCK, FCKEN : signal is ""; 
-	signal fck_mask : std_logic_vector(fck_num_feeds-1 downto 0) := "00010000";
+	signal fck_mask : std_logic_vector(fck_num_feeds-1 downto 0);
 
 -- Clock Control. 
 	signal ENFCKTM : boolean; -- Enable Fast Clock, from Telemetry Manager
@@ -282,64 +284,64 @@ begin
 -- FCK works provided that the Sample Controller runs on the rising edge 
 -- of FCK and toggles SCACK on the falling edge. We use the same toggle
 -- handshake between the manager and the Telemetry Dispatcher.
-Telemetry_Manager : process (RCK) is
-    constant tm_max : integer := 31;
-    constant tm_idle : integer := tm_max;
-    constant tm_update : integer := tm_max - 1;
-    constant tm_sample : integer := tm_max - 2;
-    variable state, next_state : integer range 0 to tm_max := 0;
-    variable tx_index : integer range 0 to tx_period-1;
-begin
-    if RESET = '1' then
-        ENFCKTM <= false;
-        SCRST <= true;
-        SCRQ <= false;
-        TDRQ <= false;
-		TMCK <= false;
-        state := tm_idle;
-    elsif rising_edge(RCK) then
-        if not TMRUN then
-            next_state := tm_idle;
-        else
-            if state = tm_idle then
-                next_state := 0;
-            else
-                next_state := state + 1;
-            end if;
-        end if;
+	Telemetry_Manager : process (RCK) is
+		constant tm_max : integer := 31;
+		constant tm_idle : integer := tm_max;
+		constant tm_update : integer := tm_max - 1;
+		constant tm_sample : integer := tm_max - 2;
+		variable state, next_state : integer range 0 to tm_max := 0;
+		variable tx_index : integer range 0 to tx_period-1;
+	begin
+		if RESET = '1' then
+			ENFCKTM <= false;
+			SCRST <= true;
+			SCRQ <= false;
+			TDRQ <= false;
+			TMCK <= false;
+			state := tm_idle;
+		elsif rising_edge(RCK) then
+			if not TMRUN then
+				next_state := tm_idle;
+			else
+				if state = tm_idle then
+					next_state := 0;
+				else
+					next_state := state + 1;
+				end if;
+			end if;
 
-		TMCK <= false;
-		
-        if (state = to_integer(unsigned(transmit_shift))) then
-            if tx_index = 0 then
-                TDRQ <= not TDRQ;
-            end if;
-        elsif (state = tm_sample) then
-            SCRQ <= not SCRQ;
-        elsif (state = tm_update) then
-            SCRST <= true;
-            TDRST <= true;
-            if tx_index = 0 then
-				TMCK <= true;
-                tx_index := tx_period - 1;
-            else
-                tx_index := tx_index - 1;
-            end if;
-        elsif (state = tm_idle) then
-            SCRST <= false;
-            TDRST <= false;
-            if not TMRUN then
-                tx_index := tx_period - 1;
-            end if;
-        else
-            SCRST <= false;
-        end if;
+			TMCK <= false;
+			
+			if (state = to_integer(unsigned(transmit_shift))) then
+				if tx_index = 0 then
+					TDRQ <= not TDRQ;
+				end if;
+			elsif (state = tm_sample) then
+				SCRQ <= not SCRQ;
+			elsif (state = tm_update) then
+				SCRST <= true;
+				TDRST <= true;
+				if tx_index = 0 then
+					TMCK <= true;
+					tx_index := tx_period - 1;
+				else
+					tx_index := tx_index - 1;
+				end if;
+			elsif (state = tm_idle) then
+				SCRST <= false;
+				TDRST <= false;
+				if not TMRUN then
+					tx_index := tx_period - 1;
+				end if;
+			else
+				SCRST <= false;
+			end if;
 
-        state := next_state;
-    end if;
+			state := next_state;
+		end if;
 
-    ENFCKTM <= (SCRQ xor SCACK) or (TDRQ xor TDACK);
-end process;
+		ENFCKTM <= (SCRQ xor SCACK) or (TDRQ xor TDACK);
+	end process;
 
 -- The Sample Memory is eighteen bits wide so as to accommodate
 -- the sum of up to sixteen fourteen-bit ADC samples. The sample 
@@ -388,112 +390,112 @@ end process;
 -- flags when it is idle. The latching of these flags is essential. If we
 -- do not latch them, the firmware will freeze occasionally on RESET.
 -- The controller sets adc_sel to match each ADC in turn.
-Sample_Controller : process (FCK) is
-    variable state, next_state : integer range 0 to 5 := 0;
-    variable adc_index : integer range 0 to 3 := 0;
-    variable X1SKIPL, X2SKIPL, X3SKIPL, X4SKIPL : boolean;
-    variable skip_adc : boolean;
-    constant sc_idle  : integer := 0;
-    constant sc_check : integer := 1;
-    constant sc_start : integer := 2;
-    constant sc_adcw  : integer := 3;
-    constant sc_done  : integer := 4;
-    constant sc_wait  : integer := 5;
- 
-begin
-    if RESET = '1' then
-        SCACK <= false;
-    elsif falling_edge(FCK) then
-        if state = sc_wait then
-            SCACK <= SCRQ;
-        end if;
-    end if;
+	Sample_Controller : process (FCK) is
+		variable state, next_state : integer range 0 to 5 := 0;
+		variable adc_index : integer range 0 to 3 := 0;
+		variable X1SKIPL, X2SKIPL, X3SKIPL, X4SKIPL : boolean;
+		variable skip_adc : boolean;
+		constant sc_idle  : integer := 0;
+		constant sc_check : integer := 1;
+		constant sc_start : integer := 2;
+		constant sc_adcw  : integer := 3;
+		constant sc_done  : integer := 4;
+		constant sc_wait  : integer := 5;
+	 
+	begin
+		if RESET = '1' then
+			SCACK <= false;
+		elsif falling_edge(FCK) then
+			if state = sc_wait then
+				SCACK <= SCRQ;
+			end if;
+		end if;
 
-    if RESET = '1' then
-        ADCCAL <= true;
-    elsif rising_edge(FCK) then
-        if state = sc_done then
-            ADCCAL <= false;
-        end if;
-    end if;
+		if RESET = '1' then
+			ADCCAL <= true;
+		elsif rising_edge(FCK) then
+			if state = sc_done then
+				ADCCAL <= false;
+			end if;
+		end if;
 
-    if SCRST then
-		ADCRD <= false;
-		adc_sel <= x1_sel;
-		state := sc_idle;
-		adc_index := 0;
-		X1SKIPL := X1SKIP;
-		X2SKIPL := X2SKIP;
-		X3SKIPL := X3SKIP;
-		X4SKIPL := X4SKIP;
-    elsif rising_edge(FCK) then
-        ADCRD <= false;
-        next_state := state;
-		
-		case adc_index is
-            when 0 =>
-                adc_sel <= x1_sel;
-                skip_adc := X1SKIPL;
-            when 1 =>
-                adc_sel <= x2_sel;
-                skip_adc := X2SKIPL;
-            when 2 =>
-                adc_sel <= x3_sel;
-                skip_adc := X3SKIPL;
-            when others =>
-                adc_sel <= x4_sel;
-                skip_adc := X4SKIPL;
-        end case;
+		if SCRST then
+			ADCRD <= false;
+			adc_sel <= x1_sel;
+			state := sc_idle;
+			adc_index := 0;
+			X1SKIPL := X1SKIP;
+			X2SKIPL := X2SKIP;
+			X3SKIPL := X3SKIP;
+			X4SKIPL := X4SKIP;
+		elsif rising_edge(FCK) then
+			ADCRD <= false;
+			next_state := state;
+			
+			case adc_index is
+				when 0 =>
+					adc_sel <= x1_sel;
+					skip_adc := X1SKIPL;
+				when 1 =>
+					adc_sel <= x2_sel;
+					skip_adc := X2SKIPL;
+				when 2 =>
+					adc_sel <= x3_sel;
+					skip_adc := X3SKIPL;
+				when others =>
+					adc_sel <= x4_sel;
+					skip_adc := X4SKIPL;
+			end case;
 
-        case state is
-            when sc_idle =>
-                adc_index := 0;
-                adc_sel <= x1_sel;
- 
-                if SCRQ xor SCACK then
-                    next_state := sc_check;
-                else
-                    next_state := sc_idle;
-                end if;
-            when sc_check =>
-                if skip_adc then
-                    if adc_index = 3 then
-                        next_state := sc_done;
-                    else
-                        adc_index := adc_index + 1;
-                        next_state := sc_check;
-                    end if;
-                else
-                    next_state := sc_start;
-                end if;
-            when sc_start =>
-				ADCRD <= true;
-				if ADCBSY then
-					next_state := sc_adcw;
-				else
-					next_state := sc_start;
-				end if;
-            when sc_adcw =>
-                if ADCBSY then
-                    next_state := sc_adcw;
-                elsif adc_index = 3 then
-                    next_state := sc_done;
-                else
-                    adc_index := adc_index + 1;
-                    next_state := sc_check;
-                end if;
-            when sc_done =>
-                adc_sel <= x4_sel;
-                next_state := sc_wait;
-            when others =>
-                adc_sel <= x4_sel;
-                next_state := sc_wait;
-        end case;
+			case state is
+				when sc_idle =>
+					adc_index := 0;
+					adc_sel <= x1_sel;
+	 
+					if SCRQ xor SCACK then
+						next_state := sc_check;
+					else
+						next_state := sc_idle;
+					end if;
+				when sc_check =>
+					if skip_adc then
+						if adc_index = 3 then
+							next_state := sc_done;
+						else
+							adc_index := adc_index + 1;
+							next_state := sc_check;
+						end if;
+					else
+						next_state := sc_start;
+					end if;
+				when sc_start =>
+					ADCRD <= true;
+					if ADCBSY then
+						next_state := sc_adcw;
+					else
+						next_state := sc_start;
+					end if;
+				when sc_adcw =>
+					if ADCBSY then
+						next_state := sc_adcw;
+					elsif adc_index = 3 then
+						next_state := sc_done;
+					else
+						adc_index := adc_index + 1;
+						next_state := sc_check;
+					end if;
+				when sc_done =>
+					adc_sel <= x4_sel;
+					next_state := sc_wait;
+				when others =>
+					adc_sel <= x4_sel;
+					next_state := sc_wait;
+			end case;
 
-        state := next_state;
-        SCBSY <= (state > sc_idle) and (state < sc_wait);
-    end if;
-end process;
+			state := next_state;
+			SCBSY <= (state > sc_idle) and (state < sc_wait);
+		end if;
+	end process;
 
 -- ADC Controller starts reading one of the 14-bit ADCs when it detects 
 -- ADC Read (ADCRD). It waits until ADCRD is unasserted before returning
@@ -509,215 +511,215 @@ end process;
 -- of twenty-four bits, with no shifting, no accumulation, and no storage. 
 -- This calibration read will cause the ADC to self-calibrate provided 
 -- that the calibration access is the first one after power-up. 
-ADC_Controller : process (RESET, FCK) is
-    variable state, next_state : integer range 0 to 63 := 0;
-    constant calib_end : integer := 50;
-    constant read_end : integer := 40;
-	variable adc_shift : integer := 0;
-begin
-	-- Calculate the number of left shifts we should apply to each ADC
-	-- sample before storing in the sample memory.
-	if (tx_period = 1) then
-		adc_shift := 4;
-	elsif (tx_period = 2) then
-		adc_shift := 3;
-	elsif (tx_period = 4) then
-		adc_shift := 2;
-	elsif (tx_period = 8) then
-		adc_shift := 1;
-	elsif (tx_period = 16) then
-		adc_shift := 0;
-	else
-		adc_shift := 0;
-	end if;
+	ADC_Controller : process (RESET, FCK) is
+		variable state, next_state : integer range 0 to 63 := 0;
+		constant calib_end : integer := 50;
+		constant read_end : integer := 40;
+		variable adc_shift : integer := 0;
+	begin
+		-- Calculate the number of left shifts we should apply to each ADC
+		-- sample before storing in the sample memory.
+		if (tx_period = 1) then
+			adc_shift := 4;
+		elsif (tx_period = 2) then
+			adc_shift := 3;
+		elsif (tx_period = 4) then
+			adc_shift := 2;
+		elsif (tx_period = 8) then
+			adc_shift := 1;
+		elsif (tx_period = 16) then
+			adc_shift := 0;
+		else
+			adc_shift := 0;
+		end if;
 
-    -- Upon startup, make sure we are in the idle state.
-    if (RESET = '1') then
-        state := 0;
-        ADCBSY <= false;
-        ACCADD <= '0';
-        SMWRADC <= '0';
-        adc_data <= (others => '0');
-        transmit_shift <= (others => '1');
+		-- Upon startup, make sure we are in the idle state.
+		if (RESET = '1') then
+			state := 0;
+			ADCBSY <= false;
+			ACCADD <= '0';
+			SMWRADC <= '0';
+			adc_data <= (others => '0');
+			transmit_shift <= (others => '1');
 
-    -- The ADC Controller initiates a conversion and reads
-    -- one zero, fourteen data bits, and three trailing zeros.
-    -- Calibration reads have nine trailing zeros instead.
-    elsif falling_edge(FCK) then
+		-- The ADC Controller initiates a conversion and reads
+		-- one zero, fourteen data bits, and three trailing zeros.
+		-- Calibration reads have nine trailing zeros instead.
+		elsif falling_edge(FCK) then
 
-        -- Shared state-counter logic.
-        if (state = 0) then
-            if ADCRD then
-                next_state := 1;
-            else
-                next_state := 0;
-            end if;
-        elsif ((state = read_end) and (not ADCCAL))
-            or ((state = calib_end) and ADCCAL) then
-            next_state := 0;
-        else
-            next_state := state + 1;
-        end if;
+			-- Shared state-counter logic.
+			if (state = 0) then
+				if ADCRD then
+					next_state := 1;
+				else
+					next_state := 0;
+				end if;
+			elsif ((state = read_end) and (not ADCCAL))
+				or ((state = calib_end) and ADCCAL) then
+				next_state := 0;
+			else
+				next_state := state + 1;
+			end if;
 
-        -- Acquire ADC data.
-        if ADCCAL then
-            adc_data <= (others => '0');
-        else
-            if (state = 1) then
-                adc_data <= (others => '0');
-            end if;
+			-- Acquire ADC data.
+			if ADCCAL then
+				adc_data <= (others => '0');
+			else
+				if (state = 1) then
+					adc_data <= (others => '0');
+				end if;
 
-            -- Read fourteen ADC data bits.
-            if (state >= 4) and (state <= 30)
-                and ((state mod 2) = 0) then
-                adc_data(17 downto 1) <= adc_data(16 downto 0);
-                adc_data(0) <= SDO;
-            end if;
+				-- Read fourteen ADC data bits.
+				if (state >= 4) and (state <= 30)
+					and ((state mod 2) = 0) then
+					adc_data(17 downto 1) <= adc_data(16 downto 0);
+					adc_data(0) <= SDO;
+				end if;
 
-            -- Programmable left shift, zero to four places.
-            if ((state = 32) and (adc_shift >= 1))
-                or ((state = 34) and (adc_shift >= 2))
-                or ((state = 36) and (adc_shift >= 3))
-                or ((state = 38) and (adc_shift >= 4)) then
-                adc_data(17 downto 1) <= adc_data(16 downto 0);
-                adc_data(0) <= '0';
-            end if;
-        end if;
+				-- Programmable left shift, zero to four places.
+				if ((state = 32) and (adc_shift >= 1))
+					or ((state = 34) and (adc_shift >= 2))
+					or ((state = 36) and (adc_shift >= 3))
+					or ((state = 38) and (adc_shift >= 4)) then
+					adc_data(17 downto 1) <= adc_data(16 downto 0);
+					adc_data(0) <= '0';
+				end if;
+			end if;
 
-        -- Shared SCK generation for normal and
-        -- calibration reads.
-        SCK <= to_std_logic(
-            (state = 0)
-            or (
-                ((state mod 2) = 1)
-                and (state < 48)
-                and (ADCCAL or (state < 36))
-            )
-        );
+			-- Shared SCK generation for normal and
+			-- calibration reads.
+			SCK <= to_std_logic(
+				(state = 0)
+				or (
+					((state mod 2) = 1)
+					and (state < 48)
+					and (ADCCAL or (state < 36))
+				)
+			);
 
-        -- Update the transmit-scatter shift register.
-        if (state = 31) then
-            transmit_shift(3) <=
-                adc_data(0) xor transmit_shift(0);
-            transmit_shift(2) <=
-                transmit_shift(3) xor transmit_shift(0);
-            transmit_shift(1) <= transmit_shift(2);
-            transmit_shift(0) <= transmit_shift(1);
-        end if;
+			-- Update the transmit-scatter shift register.
+			if (state = 31) then
+				transmit_shift(3) <=
+					adc_data(0) xor transmit_shift(0);
+				transmit_shift(2) <=
+					transmit_shift(3) xor transmit_shift(0);
+				transmit_shift(1) <= transmit_shift(2);
+				transmit_shift(0) <= transmit_shift(1);
+			end if;
 
-        -- Accumulator and sample-memory control.
-        ACCADD <= to_std_logic((state = read_end - 1) and (not ADCCAL));
-        SMWRADC <= to_std_logic((state = read_end) and (not ADCCAL));
+			-- Accumulator and sample-memory control.
+			ACCADD <= to_std_logic((state = read_end - 1) and (not ADCCAL));
+			SMWRADC <= to_std_logic((state = read_end) and (not ADCCAL));
 
-        -- ADC busy flag.
-		ADCBSY <=
-			(state > 0)
-			and (state < calib_end)
-			and (ADCCAL or (state < read_end));
+			-- ADC busy flag.
+			ADCBSY <=
+				(state > 0)
+				and (state < calib_end)
+				and (ADCCAL or (state < read_end));
 
-        state := next_state;
-    end if;
+			state := next_state;
+		end if;
 
-    -- Select the ADC using the top two bits
-    -- of the sample address.
-    NADC1 <= to_std_logic(not (ADCBSY and (adc_sel = x1_sel)));
-    NADC2 <= to_std_logic(not (ADCBSY and (adc_sel = x2_sel)));
-    NADC3 <= to_std_logic(not (ADCBSY and (adc_sel = x3_sel)));
-    NADC4 <= to_std_logic(not (ADCBSY and (adc_sel = x4_sel)));
-end process;
+		-- Select the ADC using the top two bits
+		-- of the sample address.
+		NADC1 <= to_std_logic(not (ADCBSY and (adc_sel = x1_sel)));
+		NADC2 <= to_std_logic(not (ADCBSY and (adc_sel = x2_sel)));
+		NADC3 <= to_std_logic(not (ADCBSY and (adc_sel = x3_sel)));
+		NADC4 <= to_std_logic(not (ADCBSY and (adc_sel = x4_sel)));
+	end process;
 
 -- The Telemetry Dispatcher runs off FCK and is reset by TDRST.
 -- It transmits four channels in sequence, clearing each accumulator 
 -- after transmission. The channel index replaces four separate copies 
 -- of the transmit, wait, and clear state sequences.
-Telemetry_Dispatcher : process (RESET, FCK) is
-    variable state, next_state : integer range 0 to 5 := 0;
-    variable channel_index : integer range 0 to 3 := 0;
-    constant td_idle : integer := 0;
-    constant td_tx   : integer := 1;
-    constant td_wt   : integer := 2;
-    constant td_clr  : integer := 3;
-    constant td_done : integer := 4;
-    constant td_wait : integer := 5;
-begin
-    if RESET = '1' then
-        TDACK <= false;
-    elsif falling_edge(FCK) then
-        if state = td_wait then
-            TDACK <= TDRQ;
-        end if;
-    end if;
+	Telemetry_Dispatcher : process (RESET, FCK) is
+		variable state, next_state : integer range 0 to 5 := 0;
+		variable channel_index : integer range 0 to 3 := 0;
+		constant td_idle : integer := 0;
+		constant td_tx   : integer := 1;
+		constant td_wt   : integer := 2;
+		constant td_clr  : integer := 3;
+		constant td_done : integer := 4;
+		constant td_wait : integer := 5;
+	begin
+		if RESET = '1' then
+			TDACK <= false;
+		elsif falling_edge(FCK) then
+			if state = td_wait then
+				TDACK <= TDRQ;
+			end if;
+		end if;
 
-    if TDRST then
-        state := td_idle;
-        channel_index := 0;
-    elsif rising_edge(FCK) then
-        ACCRST <= '0';
-        SMWRTD <= '0';
-        TXI <= false;
-        next_state := td_wait;
-		
-        if (state = td_idle) and (TDRQ xor TDACK) then
-            channel_index := 0;
-            next_state := td_tx;
-        elsif state = td_tx then
-            TXI <= true;
-            if TXA then
-                next_state := td_wt;
-            else
-                next_state := td_tx;
-            end if;
-        elsif state = td_wt then
-            if TXA then
-                next_state := td_wt;
-            else
-                next_state := td_clr;
-            end if;
-        elsif state = td_clr then
-            ACCRST <= '1';
-            SMWRTD <= '1';
-            if channel_index = 3 then
-                next_state := td_done;
-            else
-                next_state := td_tx;
-            end if;
-        elsif state = td_done then
-            next_state := td_wait;
-        else
-            next_state := td_wait;
-        end if;
+		if TDRST then
+			state := td_idle;
+			channel_index := 0;
+		elsif rising_edge(FCK) then
+			ACCRST <= '0';
+			SMWRTD <= '0';
+			TXI <= false;
+			next_state := td_wait;
+			
+			if (state = td_idle) and (TDRQ xor TDACK) then
+				channel_index := 0;
+				next_state := td_tx;
+			elsif state = td_tx then
+				TXI <= true;
+				if TXA then
+					next_state := td_wt;
+				else
+					next_state := td_tx;
+				end if;
+			elsif state = td_wt then
+				if TXA then
+					next_state := td_wt;
+				else
+					next_state := td_clr;
+				end if;
+			elsif state = td_clr then
+				ACCRST <= '1';
+				SMWRTD <= '1';
+				if channel_index = 3 then
+					next_state := td_done;
+				else
+					next_state := td_tx;
+				end if;
+			elsif state = td_done then
+				next_state := td_wait;
+			else
+				next_state := td_wait;
+			end if;
 
-        -- Select the channel associated with the current
-        -- state. In td_clr, preserve the old channel for
-        -- the accumulator reset, then advance the index.
-        if (next_state = td_wait) or
-           (state = td_done) then
-            sample_sel <= x1_sel;
-            tx_channel <= x1_channel;
-        else
-            case channel_index is
-                when 0 =>
-                    sample_sel <= x1_sel;
-                    tx_channel <= x1_channel;
-                when 1 =>
-                    sample_sel <= x2_sel;
-                    tx_channel <= x2_channel;
-                when 2 =>
-                    sample_sel <= x3_sel;
-                    tx_channel <= x3_channel;
-                when others =>
-                    sample_sel <= x4_sel;
-                    tx_channel <= x4_channel;
-            end case;
-        end if;
+			-- Select the channel associated with the current
+			-- state. In td_clr, preserve the old channel for
+			-- the accumulator reset, then advance the index.
+			if (next_state = td_wait) or
+			   (state = td_done) then
+				sample_sel <= x1_sel;
+				tx_channel <= x1_channel;
+			else
+				case channel_index is
+					when 0 =>
+						sample_sel <= x1_sel;
+						tx_channel <= x1_channel;
+					when 1 =>
+						sample_sel <= x2_sel;
+						tx_channel <= x2_channel;
+					when 2 =>
+						sample_sel <= x3_sel;
+						tx_channel <= x3_channel;
+					when others =>
+						sample_sel <= x4_sel;
+						tx_channel <= x4_channel;
+				end case;
+			end if;
 
-        if (state = td_clr) and (channel_index < 3) then
-            channel_index := channel_index + 1;
-        end if;
+			if (state = td_clr) and (channel_index < 3) then
+				channel_index := channel_index + 1;
+			end if;
 
-        state := next_state;
-    end if;
-end process;
+			state := next_state;
+		end if;
+	end process;
 
 -- The Message Transmitter responds to Transmit Initiate (TXI) by turning on the 
 -- radio-frequency oscillator, reading sixteen bits from one of the sensors and
@@ -874,7 +876,7 @@ end process;
 	
 -- We detect a long enough burst of command power to initiate
 -- command reception, and set the ICMD signal.
-	Initiate_Command: process (RESET, RCK) is 
+	Initiate_Command: process (RPS, MCK) is 
 		constant endcount : integer := 2;
 		variable counter : integer range 0 to 3;
 	begin
@@ -894,7 +896,7 @@ end process;
 	
 -- We detect a long enough period without command power to 
 -- terminate command reception, and set the TCMD signal.
-	Terminate_Command: process (RESET, RCK) is 
+	Terminate_Command: process (RPS, MCK) is 
 		constant endcount : integer := 7;
 		variable counter : integer range 0 to 7;
 	begin
@@ -1133,6 +1135,7 @@ end process;
 		if (RESET = '1') then
 			state := idle_s;
 			CMRST <= '1';
+			fck_mask <= default_fck_mask;
 			
 		-- The Command Processor state machine runs off RCK, which allows it to
 		-- work with the Byte Receiver.
@@ -1256,7 +1259,6 @@ end process;
 			state := next_state;
 		end if;
 	end process;
-
 
 	SDA <= '1';
 	SCL <= '1';
