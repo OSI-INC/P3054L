@@ -20,6 +20,9 @@
 -- into 640 LUTs with 2 EBR, as in the LXMCO2-640ZE. Increase length of
 -- ring oscillator. Flash LED during power-up sequence.
 
+-- V2.3 [22-NOV-26] Adding in the command receiver with a solitar 
+-- command to adjust the fast clock mask.
+
 
 library ieee;  
 use ieee.std_logic_1164.all;
@@ -48,10 +51,13 @@ entity main is
 		: inout std_logic;
 		xdac -- Transmit DAC Output, to set data transmit frequency
 		: out std_logic_vector(4 downto 0));
+		
+-- Identifier.
+	constant device_id : std_logic_vector(15 downto 0) := "1010101001010101";
+	constant wildcard_id : std_logic_vector(15 downto 0) := (others => '1');
 -- Configuration of the Ring Oscillator
 	constant fck_num_feeds : integer := 8;
 	constant fck_num_gates : integer := 29;
-	constant fck_mask : std_logic_vector(fck_num_feeds-1 downto 0) := "00010000";
 
 -- Configuration and Calibration of Transmitter.
 	constant tx_channel_default : integer := 1;
@@ -94,9 +100,10 @@ architecture behavior of main is
 -- Ring Oscillator, Fast Clock, and Transmit Clock. We retain all these signals
 -- as nodes in the logic to stop the compiler from spreading them around, which
 -- makes the ring oscillator period vary from one compile to the next.
-	signal TCK, FCK, FCKEN : std_logic;
+	signal TCK, FCK, MCK, FCKEN : std_logic;
 	attribute syn_keep of TCK, FCK, FCKEN : signal is true;
 	attribute nomerge of TCK, FCK, FCKEN : signal is ""; 
+	signal fck_mask : std_logic_vector(fck_num_feeds-1 downto 0) := "00010000";
 
 -- Clock Control. 
 	signal ENFCKTM : boolean; -- Enable Fast Clock, from Telemetry Manager
@@ -149,8 +156,33 @@ architecture behavior of main is
 	signal tx_channel : integer range 0 to 255;
 	signal transmit_shift : std_logic_vector(3 downto 0);
 		
--- I2C Bus Controller
-	signal i2c_in : std_logic_vector(7 downto 0); -- I2C Serial Byte
+-- Byte Receiver
+	signal RPS, -- Radio Frequency Power Synchronized
+		ICMD, -- Initiate Command Reception
+		TCMD, -- Terminate Command Reception
+		RCMD, -- Receive Command
+		RBI, -- Receive Command Byte Initiate
+		RBD, -- Receive Command Byte Done
+		BYTERR, -- Byte Error
+		CRCERR, -- Checksum Error
+		BYTS, -- Command Byte Strobe
+		CBS -- Command Bit Strobe (CBS)
+		: boolean := false; 
+	
+-- Command Memory
+	signal cmd_in : std_logic_vector(7 downto 0); -- Command Memory Data In
+	signal cmd_out : std_logic_vector(7 downto 0); -- Command Memory Data Out
+	signal CME, -- Command Memory Empty
+		CMF, -- Command Memory Full
+		CMRST, -- Command Memory Reset
+		CMWR,  -- Command Memory Write
+		CMRD -- Command Memory Read
+		: std_logic; 
+
+-- Command Processor
+	signal CPRST -- Command Processor Reset
+		: boolean := false;
+	signal target_id : std_logic_vector(15 downto 0);
 	
 -- Functions and Procedures	
 	function to_std_logic (v: boolean) return std_ulogic is
@@ -220,6 +252,21 @@ begin
 		end if;
 	end process;
 			
+-- The Millisecond Clock takes RCK, which is 32.768 kHz and divides
+-- by 32 to get 1.024 kHz, which we use as our millisecond clock.
+	Millisecond_Clock : process (RCK) is
+		variable mcnt : integer range 0 to 31;
+	begin
+		if falling_edge(RCK) then
+			mcnt := mcnt + 1;
+			if (mcnt <= 15) then
+				MCK <= '0';
+			else
+				MCK <= '1';
+			end if;
+		end if;	
+	end process;
+		
 -- The Telemetry Manager organizes sampling of the inputs X1-X4 at
 -- frequency that is an integer fraction of 1024 SPS and generates
 -- the transmit interrupt offset from sampling by a random number
@@ -815,6 +862,402 @@ end process;
 		end if;
 	end process;
 	
+-- The Receive Power signal must be synchronized with the RCK clock.
+	Synchronize_RP: process (RESET, RCK) is 
+	begin
+		if RESET = '1' then
+			RPS <= false;
+		elsif rising_edge(RCK) then
+			RPS <= (RP = '1');
+		end if;
+	end process;
+	
+-- We detect a long enough burst of command power to initiate
+-- command reception, and set the ICMD signal.
+	Initiate_Command: process (RESET, RCK) is 
+		constant endcount : integer := 2;
+		variable counter : integer range 0 to 3;
+	begin
+		if (not RPS) then
+			ICMD <= false;
+			counter := 0;
+		elsif rising_edge(MCK) then
+			if (counter = endcount) then 
+				counter := endcount;
+				ICMD <= true;
+			else 
+				counter := counter + 1;
+				ICMD <= false;
+			end if;
+		end if;
+	end process;
+	
+-- We detect a long enough period without command power to 
+-- terminate command reception, and set the TCMD signal.
+	Terminate_Command: process (RESET, RCK) is 
+		constant endcount : integer := 7;
+		variable counter : integer range 0 to 7;
+	begin
+		if RPS then
+			counter := 0;
+			TCMD <= false;
+		elsif rising_edge(MCK) then
+			if (counter = endcount) then 
+				counter := endcount;
+				TCMD <= true;
+			else 
+				counter := counter + 1;
+				TCMD <= false;
+			end if;
+		end if;
+	end process;
+	
+-- The Receive Command (RCMD) signal indicates that a command is being 
+-- received. We set RCMD when Initiate Command (ICMD) occurs, and we clear
+-- RCMD when Terminate Command (TCMD) occurs.
+	Receive_Command: process (RESET, RCK) is
+	begin
+		if RESET = '1' then
+			RCMD <= false;
+		elsif rising_edge(RCK) then
+			if not RCMD then
+				RCMD <= ICMD;
+			else 
+				RCMD <= not TCMD;
+			end if;
+		end if;
+	end process;
+
+-- We watch for a start bit and receive serial bytes when instructed
+-- to do so by the Command Processor with the RBI signal.
+	Byte_Receiver: process (RESET, RCK) is
+		variable state, next_state : integer range 0 to 63;
+		variable no_stop_bit : boolean;
+	begin
+		if RESET = '1' then
+			state := 0;
+		elsif rising_edge(RCK) then
+		
+			-- Idle state, waiting for Receive Byte Initiate.
+			if (state = 0) then
+				if RBI and (not RPS) then 
+					next_state := 1;
+				else 
+					next_state := 0;
+				end if;
+			end if;
+			
+			-- Wait for a start bit. If we wait long enough, we will see the 
+			-- termination signal, in which case we abort and wait for not RPI.
+			-- We clear no stop bit variable, which clears the global BYTERR 
+			-- signal.
+			if (state = 1) then
+				if TCMD then 
+					next_state := 63; 
+				else 
+					if RPS then 
+						next_state := 2;
+					else 
+						next_state := 1; 
+					end if;
+				end if;
+				no_stop_bit := false;
+			end if;
+			BYTERR <= no_stop_bit;
+			
+			-- Once we have a start bit, we proceed through the eight bits of
+			-- a command byte, each bit taking four states. The first bit occurs
+			-- at state 7 and the stop bit at state 39.
+			if (state >= 2) and (state <= 38) then 
+				next_state := state + 1; 
+			end if;
+			
+			-- If the stop bit is present, we go to our end state. If it's missing,
+			-- we go to our byte error state. The stop bit is zero, so RPS should 
+			-- at this point be false.
+			if (state = 39) then
+				if not RPS then 
+					next_state := 63;
+				else 
+					next_state := 62;
+				end if;
+			end if;
+			
+			-- Here we deal with unused states by directing them towards the byte
+			-- error state.
+			if (state > 39) and (state < 62) then 
+				next_state := 62; 
+			end if;
+			
+			-- In the byte error state, we set the "no stop bit" flag, which asserts the 
+			-- global BYTERR signal. We will not reset this flag until the Byte Receiver
+			-- starts a new byte reception. This flag tells the Command Processor to ignore
+			-- the entire command. We wait in the byte error state until RBI is unasserted. 
+			-- Because we do not assert RBD, the un-assertion of RBI will occur only when
+			-- the Command Receiver encounters a Terminate Command signal.
+			if (state = 62) then
+				if not RBI then 
+					next_state := 0;
+				else 
+					next_state := 62;
+				end if;
+				no_stop_bit := true;
+			end if;
+			
+			-- In the end state, we assert Receive Byte Done and we wait for the command
+			-- processor to un-assert Receive Byte Initiate. When we see not RBI, we return
+			-- to the idle state and unassert RBD. When we see Terminate Command (TCMD) we
+			-- unassert RBD.
+			if (state = 63) then 
+				if not RBI then 
+					next_state := 0; 
+				else 
+					next_state := 63; 
+				end if;
+			end if;
+			RBD <= (state = 63) and (not TCMD);
+					
+			-- The eight bits of the command are set every four states during
+			-- the command reception.
+			for i in 0 to 7 loop
+				if (state = 35 - i * 4) then 
+					if RPS then 
+						cmd_in(i) <= '1'; 
+					else 
+						cmd_in(i) <= '0'; 
+					end if;
+				else 
+					cmd_in(i) <= cmd_in(i); 
+				end if;
+			end loop;
+			
+			-- We assert Command Bit Strobe (CBS) one RCK period before the best moment
+			-- to sample each bit value.
+			if (state = 34) or (state = 30) or (state = 26) or (state = 22) 
+				or (state = 18) or (state = 14) or (state = 10) or (state = 6) then
+				CBS <= true;
+			else 
+				CBS <= false;
+			end if;
+			
+			-- The Byte Strobe signal indicates that we have a start bit and is 
+			-- useful as a test point trigger. It provides a pulse of two RCK 
+			-- periods.
+			BYTS <= (state = 2) or (state = 3);
+			
+			-- Assert the new state.
+			state := next_state;
+		end if;
+	end process;
+
+-- This process runs all the bits of a command through a sixteen-bit linear 
+-- feedback shift register, with local name "crc" for "cyclic redundancy check". 
+-- We preset crc to all ones. The final sixteen bits of every command are chosen 
+-- so that they reset the crc register to all zeros. If crc is not zero at the 
+-- end of a command, there was some error during reception. We use the Command
+-- Bit Strobe (CBS) signal to clock crc, because CBS is asserted only when a command 
+-- data bit is received, not when we receive a start or stop bit.
+	Error_Check : process (RESET, RCK) is
+		variable crc, next_crc : std_logic_vector(15 downto 0);
+	begin
+		if RESET = '1' then
+			crc := (others => '1');
+		elsif rising_edge(RCK) then
+			if ICMD then
+				-- When a new command transmission starts, we preload the cyclic redundancy
+				-- check register to all ones.
+				crc := (others => '1');
+			else
+				-- We use Command Bit Strobe (CBS) to clock each command bit into the CRC.
+				-- The transmitter calculates the checksum with zeros in the last
+				-- sixteen bits, reverses the order of these checksum bits, and sends
+				-- them as the last two bytes of the actual transmission, instead of the
+				-- zeros it used when it calculated its own checksum. These last sixteen
+				-- bits, thus obtained, will reset the receiver CRC to zero, provided there
+				-- has been no corruption of the data on the way.
+				if CBS then
+					for i in 0 to 9 loop next_crc(i) := crc(i+1); end loop;
+					next_crc(10) := crc(11) xor crc(0);
+					next_crc(11) := crc(12);
+					next_crc(12) := crc(13) xor crc(0);
+					next_crc(13) := crc(14) xor crc(0);
+					next_crc(14) := crc(15);
+					next_crc(15) := to_std_logic(RPS) xor crc(0);	
+					crc := next_crc;
+				end if;		
+			end if;
+		end if;
+		
+		-- The CRCERR flag tells us when the CRC is not zero. It will be zero when it
+		-- has been reset by the two bytes of a correct checksum.
+		CRCERR <= (crc /= "0000000000000000");
+	end process;
+
+-- Command Memory
+	Command_Memory : entity CMD_FIFO port map (
+		Reset => CMRST, 
+		RPReset => '0',
+		WrClock => not RCK,
+		WrEn => CMWR,
+		Data => cmd_in,
+		RdClock => not RCK,
+		RdEn => CMRD,
+		AlmostEmpty => CME,
+		Full => CMF,
+		Q => cmd_out);
+	
+-- The Command Processor detects Inititiate Command (ICMD) and activates the Byte Receiver. 
+-- It stores command bytes in the Command Memory until it detects Terminate Command (TCMD). If
+-- the Error Check reports no error, the processor proceeds to read the instructions of the
+-- command out of the command memory and execute them. 
+	Command_Processor: process (RESET, RCK) is
+		
+		-- General-purpose state names for the Command Processor
+		constant idle_s : integer := 0;
+		constant receive_cmd_s : integer := 1;
+		constant store_cmd_s : integer := 2;
+		constant check_fifo_s : integer := 3;
+		constant check_cmd_s : integer := 4;
+		constant read_id_hi_s : integer := 5;
+		constant read_id_lo_s : integer := 6;
+		constant check_id_s : integer := 7;
+		constant check_empty_s : integer := 8;
+		constant interpret_opcode_s : integer := 9;
+		constant set_fck_mask_s : integer := 10;
+		
+		-- Variables and constants for the Command Processor
+		variable state, next_state : integer range 0 to 15;
+		
+	begin
+		-- We reset to the idle state on global RESET.
+		if (RESET = '1') then
+			state := idle_s;
+			CMRST <= '1';
+			
+		-- The Command Processor state machine runs off RCK, which allows it to
+		-- work with the Byte Receiver.
+		elsif rising_edge(RCK) then
+			next_state := idle_s;
+			CMRST <= '0';
+			RBI <= false;
+			CMWR <= '0';
+			CMRD <= '0';
+		
+			-- Idle State.
+			if (state = idle_s) then
+				if ICMD then 
+					next_state := receive_cmd_s; 
+				else 
+					next_state := idle_s;
+				end if;
+				CMRST <= '1';
+			end if;
+			
+			-- Receive a command byte. We assert RBI and wait for RBD. If we see 
+			-- Terminate Command (TCMD), we move on. Note that the Byte Receiver 
+			-- aborts on TCMD also.
+			if (state = receive_cmd_s) then 
+				if TCMD then 
+					next_state := check_cmd_s;
+				else 
+					if RBD then 
+						next_state := store_cmd_s;
+					else 
+						next_state := receive_cmd_s;
+					end if;
+				end if;
+				RBI <= true;
+			end if;
+			
+			-- Store the new command byte in the command memory. We assert Command
+			-- Memory Write (CMWR) for one clock cycle.
+			if (state = store_cmd_s) then 
+				next_state := check_fifo_s;
+				CMWR <= '1';
+			end if;
+			
+			-- Check if the Command Memory is full. If so, abort. Otherwise, we 
+			-- wait for RBD to be unasserted before receiving the next command byte.
+			if (state = check_fifo_s) then
+				if (CMF = '1') then
+					next_state := idle_s;
+				elsif not RBD then
+					next_state := receive_cmd_s;
+				else
+					next_state := check_fifo_s;
+				end if;
+			end if;		
+			
+			-- There are three possible sources of error: a failure in the cyclic 
+			-- redundancy check (CRCERR), a missing stop bit (BYTERR), or an empty
+			-- command (CME). If any of these are asserted, we go back to idle and 
+			-- discard the command.
+			if (state = check_cmd_s) then
+				if BYTERR or CRCERR or (CME = '1') then 
+					next_state := idle_s;
+				else 
+					next_state := read_id_hi_s;
+				end if;
+			end if;
+
+			-- We have a complete command in memory, read the high byte of the 
+			-- command's target device identifier and bring the next byte forward.
+			if (state = read_id_hi_s) then
+				next_state := read_id_lo_s;
+				CMRD <= '1';
+				target_id(15 downto 8) <= cmd_out;
+			end if;	
+
+			-- Read the low byte of the command's target device identifier and bring
+			-- the next byte forward.
+			if (state = read_id_lo_s) then
+				next_state := check_id_s;
+				CMRD <= '1';
+				target_id(7 downto 0) <= cmd_out;
+			end if;
+
+			-- Check that the target identifier matches this device's identifier
+			-- or the wildcard.
+			if (state = check_id_s) then
+				if (target_id = device_id) or (target_id = wildcard_id) then
+					next_state := check_empty_s;
+				else
+					next_state := idle_s;
+				end if;
+			end if;
+			
+			-- If the command FIFO is empty, we are done, so go back to idle.
+			if (state = check_empty_s) then
+				if (CME = '1') then
+					next_state := idle_s;
+				else 
+					next_state := interpret_opcode_s;
+				end if;
+			end if;
+			
+			-- Interpret the opcode at the output of the command memory. At the 
+			-- same time, bring the next byte to the output of the memory.
+			if (state = interpret_opcode_s) then
+				CMRD <= '1';
+				case to_integer(unsigned(cmd_out)) is 
+					when 65 => next_state := set_fck_mask_s;
+					when others => next_state := idle_s;
+				end case;
+			end if;
+			
+			-- Set the fck_mask.
+			if (state = set_fck_mask_s) then
+				CMRD <= '1';
+				fck_mask <= cmd_out;
+				next_state := check_empty_s;
+			end if;
+
+			-- Advance the state variable.
+			state := next_state;
+		end if;
+	end process;
+
+
 	SDA <= '1';
 	SCL <= '1';
 	TP <= RP;
