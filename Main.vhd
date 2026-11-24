@@ -24,7 +24,8 @@
 -- to set fck_mask. Work on routing priorities and no-merge directives.
 -- Hard-code individual transmit periods and shifts. Update comments.
 
--- V2.4 [23-NOV-26]
+-- V2.4 [23-NOV-26] Rename CMD_FIFO to CMDMEM. Disable transmission
+-- only while command is incoming, allow while executing command.
 
 
 library ieee;  
@@ -201,7 +202,8 @@ architecture behavior of main is
 		: std_logic; 
 
 -- Command Processor
-	signal CPA -- Command Processor Active
+	signal CPRCV, -- Command Processor Receiving
+		CPA -- Command Processor Active
 		: boolean := false;
 	signal target_id_hi : std_logic_vector(7 downto 0);
 	
@@ -851,8 +853,8 @@ begin
 	end process;
 
 -- With XEN we enable the VCO. We assert XEN while Transmit Active (TXA) or 
--- Transmit Warm-Up (TXWP), but only if not Command Processor Active (CPA).
-	XEN <= to_std_logic((not CPA) and (TXA or TXWP));
+-- Transmit Warm-Up (TXWP), but only if not Command Processor Receive (CPRCV).
+	XEN <= to_std_logic((not CPRCV) and (TXA or TXWP));
 			
 -- The Frequency Modulation process takes the transmit bit values provided by
 -- the Message Transmitter, turns them into a sequence of rising and falling
@@ -1128,7 +1130,7 @@ begin
 		constant idle_s : integer := 0;
 		constant receive_cmd_s : integer := 1;
 		constant store_cmd_s : integer := 2;
-		constant check_fifo_s : integer := 3;
+		constant check_full_s : integer := 3;
 		constant check_cmd_s : integer := 4;
 		constant read_id_hi_s : integer := 5;
 		constant check_id_s : integer := 6;
@@ -1185,19 +1187,19 @@ begin
 			-- Store the new command byte in the command memory. We assert Command
 			-- Memory Write (CMWR) for one clock cycle.
 			if (state = store_cmd_s) then 
-				next_state := check_fifo_s;
+				next_state := check_full_s;
 				CMWR <= '1';
 			end if;
 			
 			-- Check if the Command Memory is full. If so, abort. Otherwise, we 
 			-- wait for RBD to be unasserted before receiving the next command byte.
-			if (state = check_fifo_s) then
+			if (state = check_full_s) then
 				if (CMF = '1') then
 					next_state := idle_s;
 				elsif not RBD then
 					next_state := receive_cmd_s;
 				else
-					next_state := check_fifo_s;
+					next_state := check_full_s;
 				end if;
 			end if;		
 			
@@ -1268,10 +1270,11 @@ begin
 			state := next_state;
 		end if;
 		
+		CPRCV <= (state > idle_s) and (state < check_cmd_s);
 		CPA <= (state /= idle_s);
 	end process;
 
 	SDA <= '1';
 	SCL <= '1';
-	TP <= to_std_logic(CPA);
+	TP <= to_std_logic(CPRCV);
 end behavior;
