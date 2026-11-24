@@ -65,7 +65,7 @@ entity main is
 		std_logic_vector(fck_num_feeds-1 downto 0) := x"10";
 
 -- Configuration and Calibration of Transmitter.
-	constant tx_channel_default : integer := 1;
+	constant td_channel_default : integer := 1;
 	constant frequency_step : integer := 1; 
 	constant frequency_low : integer := 6;
 	
@@ -78,10 +78,10 @@ entity main is
 	constant X2SKIP : boolean := false;
 	constant X3SKIP : boolean := false;
 	constant X4SKIP : boolean := false;
-	constant x1_sel : std_logic_vector(1 downto 0) := "00";
-	constant x2_sel : std_logic_vector(1 downto 0) := "01";
-	constant x3_sel : std_logic_vector(1 downto 0) := "10";
-	constant x4_sel : std_logic_vector(1 downto 0) := "11";
+	constant x1_sel : std_logic_vector(3 downto 0) := "0000";
+	constant x2_sel : std_logic_vector(3 downto 0) := "0001";
+	constant x3_sel : std_logic_vector(3 downto 0) := "0010";
+	constant x4_sel : std_logic_vector(3 downto 0) := "0011";
 	constant x1_pd : integer := 1;
 	constant x2_pd : integer := 2;
 	constant x3_pd : integer := 4;
@@ -143,15 +143,10 @@ architecture behavior of main is
 		: boolean := false;
 		
 -- Sample Memory and Accumulator
-	signal ADCWRSM, -- ADC Reader Writes to Sample Memory
-		TDWRSM, -- Telemetry Dispatcher Writes to Sample Memory
-		TDRSTACC -- Telemetry Dispatcher Resets Accumulator
-		: std_logic;
 	signal smem_data : std_logic_vector(17 downto 0); -- Sample Memory Output
 	signal acc_data : std_logic_vector(17 downto 0); -- Accumulator Output
 	signal sample_data : std_logic_vector(17 downto 0); -- Accumulator Input
-	signal smem_addr : std_logic_vector(1 downto 0); -- Sample Memory Addr
-	signal tx_sel : std_logic_vector(1 downto 0); -- Sample Selector
+	signal smem_addr : std_logic_vector(3 downto 0); -- Sample Memory Addr
 
 -- ADC Controller and ADC Reader
 	signal ADCCAL, -- Calibrate the Selected ADC
@@ -159,10 +154,18 @@ architecture behavior of main is
 		ADCBSY, -- ADC Busy
 		ADCSHSD -- ADC Reader Shifts Sample Data
 		: boolean := false;
-	signal ADCBIT, -- ADC Bit for Sample Data
+	signal ADCWRSM, -- ADC Reader Writes to Sample Memory
+		ADCBIT, -- ADC Bit for Sample Data
 		ADCADD -- ADC Reader Requests Addition
 		: std_logic;
-	signal adc_sel : std_logic_vector(1 downto 0); -- ADC Selector
+	signal adc_sel : std_logic_vector(3 downto 0); -- ADC Selector
+	
+-- Telemetry Manager and Telemetry Dispatcher.
+	signal TDWRSM, -- Telemetry Dispatcher Writes to Sample Memory
+		TDRSTACC -- Telemetry Dispatcher Resets Accumulator
+		: std_logic;
+	signal td_sel : std_logic_vector(3 downto 0); -- Sample Selector
+	signal transmit_shift : std_logic_vector(3 downto 0);
 
 -- Message Transmission. The syn_keep and nomerge reduce code size slightly.
 	signal TXI, -- Transmit Initiate
@@ -173,8 +176,7 @@ architecture behavior of main is
 		: boolean := false;
 	attribute syn_keep of TXI, TXA : signal is true;
 	attribute nomerge of TXI, TXA : signal is "";  
-	signal tx_channel : integer range 0 to 255;
-	signal transmit_shift : std_logic_vector(3 downto 0);
+	signal td_channel : integer range 0 to 255;
 		
 -- Byte Receiver
 	signal RPS, -- Radio Frequency Power Synchronized
@@ -400,7 +402,7 @@ begin
 		if SCBSY then
 			smem_addr <= adc_sel;
 		else
-			smem_addr <= tx_sel;
+			smem_addr <= td_sel;
 		end if;
 	end process;
 		
@@ -629,7 +631,7 @@ begin
 			-- Update the transmit-scatter shift register.
 			if (state = 31) then
 				transmit_shift(3) <=
-					sample_data(0) xor transmit_shift(0);
+					ADCBIT xor transmit_shift(0);
 				transmit_shift(2) <=
 					transmit_shift(3) xor transmit_shift(0);
 				transmit_shift(1) <= transmit_shift(2);
@@ -682,6 +684,7 @@ begin
 		if TDRST then
 			state := td_idle;
 			channel_index := 0;
+			td_channel <= 0;
 			TDRSTACC <= '0';
 			TDWRSM <= '0';
 		elsif rising_edge(FCK) then
@@ -725,22 +728,22 @@ begin
 			-- the accumulator reset, then advance the index.
 			if (next_state = td_wait) or
 			   (state = td_done) then
-				tx_sel <= x1_sel;
-				tx_channel <= x1_channel;
+				td_sel <= x1_sel;
+				td_channel <= x1_channel;
 			else
 				case channel_index is
 					when 0 =>
-						tx_sel <= x1_sel;
-						tx_channel <= x1_channel;
+						td_sel <= x1_sel;
+						td_channel <= x1_channel;
 					when 1 =>
-						tx_sel <= x2_sel;
-						tx_channel <= x2_channel;
+						td_sel <= x2_sel;
+						td_channel <= x2_channel;
 					when 2 =>
-						tx_sel <= x3_sel;
-						tx_channel <= x3_channel;
+						td_sel <= x3_sel;
+						td_channel <= x3_channel;
 					when others =>
-						tx_sel <= x4_sel;
-						tx_channel <= x4_channel;
+						td_sel <= x4_sel;
+						td_channel <= x4_channel;
 				end case;
 			end if;
 
@@ -779,8 +782,8 @@ begin
 	begin
 		-- The channel number, set number, and completion code are a function of the 
 		-- device id and the channel offset, which we calculate here.
-		channel_num := tx_channel mod 16;
-		set_num := tx_channel / 16;
+		channel_num := td_channel mod 16;
+		set_num := td_channel / 16;
 		completion_code := (15 - channel_num + set_num) mod 16;
 		channel_bits := std_logic_vector(to_unsigned(channel_num,4));
 		cc_bits := std_logic_vector(to_unsigned(completion_code,4));

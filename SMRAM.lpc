@@ -16,8 +16,8 @@ CoreRevision=3.9
 ModuleName=SMRAM
 SourceFormat=VHDL
 ParameterFileVersion=1.0
-Date=11/18/2026
-Time=18:37:45
+Date=11/23/2026
+Time=19:23:16
 
 [Parameters]
 Verilog=0
@@ -27,7 +27,7 @@ Destination=Synplicity
 Expression=BusA(0 to 7)
 Order=Big Endian [MSB:LSB]
 IO=0
-Addresses=4
+Addresses=16
 Data=18
 LUT=0
 MemFile=
@@ -37,4 +37,4 @@ MemFormat=orca
 =mem
 
 [Command]
-cmd_line= -w -n SMRAM -lang vhdl -synth lse -bus_exp 7 -bb -arch xo2c00 -dram -type ramdq -addr_width 2 -num_words 4 -data_width 18 -outData UNREGISTERED
+cmd_line= -w -n SMRAM -lang vhdl -synth synplify -bus_exp 7 -bb -arch xo2c00 -dram -type ramdq -addr_width 4 -num_words 16 -data_width 18 -outData UNREGISTERED

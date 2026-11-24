@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<DiamondModule name="SMRAM" module="Distributed_SPRAM" VendorName="Lattice Semiconductor Corporation" generator="IPexpress" date="2026 11 18 18:37:47.715" version="3.9" type="Module" synthesis="lse" source_format="VHDL">
+<DiamondModule name="SMRAM" module="SMRAM" VendorName="Lattice Semiconductor Corporation" generator="IPexpress" date="2026 11 23 19:23:20.865" version="3.9" type="Module" synthesis="synplify" source_format="VHDL">
   <Package>
-		<File name="" type="" modified="2026 11 18 18:37:47.528"/>
-		<File name="SMRAM.lpc" type="lpc" modified="2026 11 18 18:37:45.624"/>
-		<File name="SMRAM.vhd" type="top_level_vhdl" modified="2026 11 18 18:37:45.718"/>
-		<File name="SMRAM_tmpl.vhd" type="template_vhdl" modified="2026 11 18 18:37:45.718"/>
-		<File name="tb_SMRAM_tmpl.vhd" type="testbench_vhdl" modified="2026 11 18 18:37:45.734"/>
+		<File name="" type="" modified="2026 11 23 19:23:20.428"/>
+		<File name="SMRAM.lpc" type="lpc" modified="2026 11 23 19:23:16.996"/>
+		<File name="SMRAM.vhd" type="top_level_vhdl" modified="2026 11 23 19:23:17.059"/>
+		<File name="SMRAM_tmpl.vhd" type="template_vhdl" modified="2026 11 23 19:23:17.059"/>
+		<File name="tb_SMRAM_tmpl.vhd" type="testbench_vhdl" modified="2026 11 23 19:23:17.074"/>
   </Package>
 </DiamondModule>
