@@ -298,63 +298,48 @@ begin
 		end if;	
 	end process;
 		
--- The Telemetry Manager starts the Sample Controller regularly at 1024 Hz
--- and starts the Telemetry Dispatcher irregularly at 1024 Hz / tx_period,
--- where tx_period must be 1, 2, 4, 8, or 16. The Sample Controller will 
--- sample, shift, and store all enabled intputs. The Telemetry Dispatcher 
--- will transmit all enabled inputs. We say "irregularly" because the 
--- moment the dispatcher is started is shifted within the 1024 Hz period 
--- by 0-15 RCK periods so as to produce "transmission scatter", which is 
--- a requirement of our telemetry protocol. The Telemetry Manager runs off
--- RCK but the Sample Controller and the Telemetry Dispatcher run off 
--- FCK. Furthermore, the Telemetry Manager turns on FCK for these processes.
--- To perform the control of FCK we use toggle hand-shakes. We have SCRQ and
--- SCACK for the Sample Controller and TDRQ and TDACK for the Telemetry
--- Dispatcher. The signals are toggled rather than set, and their equality
--- turns on FCK. We also have SCRST and TDRST to reset the controller and
--- dispatcher.
+-- The Telemetry Manager cycles through thirty-two states at 1024 Hz.-- It runs of the rising edge of RCK. In states zero to seven, it
+-- updates the sample memory as required by the telemetry protocol. The
+-- manager will not aquire or update each sample memory location on each
+-- cycle, but may instead wait for some number of cycles before updating.
+-- Whenever the manager updates the sample memory, it does so by calling
+-- upon an acquisition process that runs off the falling edge of FCK. The
+-- manager and the acquisition process communicate through a toggle 
+-- handshake consisting of two signals xRQ and xACK. The manager toggles
+-- xRQ to start acquisition process x. When xRQ and xACK are not equal,
+-- FCK will start running. The first thing that happens is FCK goes HI.
+-- On the falling edge of FCK, process x notices that xRQ and xACK are
+-- not equal and starts running. When process x is done, it toggles xACK
+-- and returns to its idle state. Now that xACK and xRQ are equal, FCK
+-- stops running. After the falling edge that toggles xACK, FCK remains
+-- LO and process x stays in its idle state. The manager assumes that 
+-- every acquisition process will complete within one RCK cycle, so it
+-- does not bother to watch the acquisition busy flag.
+--
+-- In states sixteen to forty-seven, the Telemetry Manager uses the four
+-- transmit_shift bits to pick one of these sixteen states to start the
+-- Telemetry Dispatcher. The dispatcher runs off the falling edge of FCK
+-- and interacts with the manager in the same way as the acquisition
+-- processes: with a request and acknowledge toggle handshake. 
+--
+-- In states forty-eight to sixty-three, the Telemetry Manager is doing 
+-- nothing. The Telemetry Dispatcher has at least sixteen RCK periods to-- to transmit all its messages before the next set of acquisitions begins.
 	Telemetry_Manager : process (all) is
-		constant tm_max : natural := 31;
-		constant tm_idle : natural := tm_max;
-		constant tm_update : natural := tm_max - 1;
-		constant tm_sample : natural := tm_max - 2;
-		variable state, next_state : natural range 0 to tm_max := 0;
-		variable tx_index : natural range 0 to tx_period-1;
+		constant cycle_len : positive := 32;
+		variable state, next_state : natural range 0 to cycle_len-1;
 	begin
-		if RESET = '1' then
+		if (RESET = '1') or (not TMRUN) then
 			ENFCKTM <= false;
 			SCRQ <= false;
 			TDRQ <= false;
-			state := tm_idle;
-			tx_index := 0;
+			state := cycle_len-1;
 		elsif rising_edge(RCK) then
-			if not TMRUN then
-				next_state := tm_idle;
-				tx_index := 0;
-			else
-				if state = tm_idle then
-					next_state := 0;
-				else
-					next_state := (state + 1) mod (tm_max + 1);
-				end if;
-			end if;
+			next_state := (state + 1) mod cycle_len;
 
-			if (state = to_integer(unsigned(transmit_shift))) then
-				if tx_index = 0 then
-					TDRQ <= not TDRQ;
-				end if;
-			elsif (state = tm_sample) then
+			if (state = 7) then
 				SCRQ <= not SCRQ;
-			elsif (state = tm_update) then
-				if tx_index = 0 then
-					tx_index := tx_period - 1;
-				else
-					tx_index := tx_index - 1;
-				end if;
-			elsif (state = tm_idle) then
-				if not TMRUN then
-					tx_index := tx_period - 1;
-				end if;
+			elsif (state = to_integer(unsigned(transmit_shift))+16) then
+				TDRQ <= not TDRQ;
 			end if;
 
 			state := next_state;
@@ -679,10 +664,12 @@ begin
 		constant td_wt   : natural := 2;
 		constant td_clr  : natural := 3;
 		constant td_done : natural := 4;
+		variable tx_idx : natural range 0 to tx_period-1;
 	begin
 		if RESET = '1' then
 			state := td_idle;
 			channel_index := 0;
+			tx_idx := 0;
 			td_channel <= 0;
 			TDRSTACC <= '0';
 			TDWRSM <= '0';
@@ -694,7 +681,13 @@ begin
 			
 			if (state = td_idle) and (TDRQ xor TDACK) then
 				channel_index := 0;
-				next_state := td_tx;
+				if (tx_idx = 0) then
+					next_state := td_tx;
+					tx_idx := tx_period - 1;
+				else 
+					next_state := td_done;
+					tx_idx := tx_idx - 1;
+				end if;
 			elsif state = td_tx then
 				TXI <= true;
 				if TXA then
@@ -1267,5 +1260,5 @@ begin
 
 	SDA <= '1';
 	SCL <= '1';
-	TP <= to_std_logic(CPRCV);
+	TP <= to_std_logic(ADCCS);
 end behavior;
