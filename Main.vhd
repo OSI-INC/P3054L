@@ -24,6 +24,8 @@
 -- to set fck_mask. Work on routing priorities and no-merge directives.
 -- Hard-code individual transmit periods and shifts. Update comments.
 
+-- V2.4 [23-NOV-26]
+
 
 library ieee;  
 use ieee.std_logic_1164.all;
@@ -141,21 +143,26 @@ architecture behavior of main is
 		: boolean := false;
 		
 -- Sample Memory and Accumulator
-	signal SMWRADC, -- Sample Memory Write by ADC Controller
-		SMWRTD, -- Sample Memory Write by Telemetry Dispatcher
-		ACCADD, -- Accumulator Add
-		ACCRST -- Accumulator Reset
+	signal ADCWRSM, -- ADC Reader Writes to Sample Memory
+		TDWRSM, -- Telemetry Dispatcher Writes to Sample Memory
+		TDRSTACC -- Telemetry Dispatcher Resets Accumulator
 		: std_logic;
-	signal smem_data, acc_data : std_logic_vector(17 downto 0);
-	signal smem_addr, sample_sel : std_logic_vector(1 downto 0);
+	signal smem_data : std_logic_vector(17 downto 0); -- Sample Memory Output
+	signal acc_data : std_logic_vector(17 downto 0); -- Accumulator Output
+	signal sample_data : std_logic_vector(17 downto 0); -- Accumulator Input
+	signal smem_addr : std_logic_vector(1 downto 0); -- Sample Memory Addr
+	signal tx_sel : std_logic_vector(1 downto 0); -- Sample Selector
 
--- ADC Controller.
+-- ADC Controller and ADC Reader
 	signal ADCCAL, -- Calibrate the Selected ADC
 		ADCRD, -- Initiate ADC Read
-		ADCBSY -- ADC Busy
+		ADCBSY, -- ADC Busy
+		ADCSHSD -- ADC Reader Shifts Sample Data
 		: boolean := false;
-	signal adc_data : std_logic_vector(17 downto 0);
-	signal adc_sel : std_logic_vector(1 downto 0);
+	signal ADCBIT, -- ADC Bit for Sample Data
+		ADCADD -- ADC Reader Requests Addition
+		: std_logic;
+	signal adc_sel : std_logic_vector(1 downto 0); -- ADC Selector
 
 -- Message Transmission. The syn_keep and nomerge reduce code size slightly.
 	signal TXI, -- Transmit Initiate
@@ -365,37 +372,51 @@ begin
 	Sample_Memory : entity SMRAM port map (
 		Clock => not FCK,
 		ClockEn => '1',
- 		WE => SMWRADC or SMWRTD,
+ 		WE => ADCWRSM or TDWRSM,
 		Address => smem_addr, 
 		Data => acc_data,
 		Q => smem_data);
-	
+
+-- The Sample Register accepts an input value from one of the 
+-- sample-generating processes and shifts left in response to 
+-- any one of the shift signals provided by those same processes.
+	Sample_Register : process (RESET, FCK) is
+	begin
+		if RESET = '1' then
+			sample_data <= (others => '0');
+		elsif falling_edge(FCK) then
+			if ADCSHSD then
+				sample_data(17 downto 1) <= sample_data(16 downto 0);
+				sample_data(0) <= ADCBIT;
+			end if;
+		end if;
+	end process;
+
 -- The Sample Memory Address Multiplexer sets the sample memory 
--- address equal to adc_sel when the Sample Controller is busy, 
--- and sample_sel otherwise. The former is incremented by the 
--- Sample Controller.
-	Sample_Addr_Mux : process (all) is 
+-- address equal to the address specified by one of the 
+-- sample-generating processes.
+	Sample_Addr : process (all) is 
 	begin
 		if SCBSY then
 			smem_addr <= adc_sel;
 		else
-			smem_addr <= sample_sel;
+			smem_addr <= tx_sel;
 		end if;
 	end process;
 		
--- The Sample Accumulator adds newly-acquired ADC samples, which 
--- have been shifted left from zero to four places, to an existing 
--- eighteen bit sample memory value.
+-- The Sample Accumulator adds the sample data to the output 
+-- of the sample memory. We can reset its output to zero with
+-- its reset line.
 	Sample_Accumulator : entity SMADD port map (
-		DataA => adc_data,
+		DataA => sample_data,
 		DataB => smem_data,
 		Result => acc_data,
 		Clock => not FCK,
-		ClockEn => ACCADD,
-		Reset => ACCRST
+		ClockEn => ADCADD,
+		Reset => TDRSTACC
 	);
 
--- The Sample Controller organizes sampling of all four inputs X1-X4 using
+-- The ADC Controller organizes sampling of all four inputs X1-X4 using
 -- the four converters ADC1-ADC4. It runs off FCK. It starts running when
 -- it SCRST is unasserted and FCK is running. It will not return to its idle 
 -- state until SCRST is asserted again. It indicates to the source of SCRST
@@ -404,9 +425,9 @@ begin
 -- clear. It latches the state of the four skip flags when it is idle or else
 -- the firmware will freeze occasionally on RESET. The controller sets adc_sel 
 -- and adc_shift to match each ADC in turn. The controller does not perform
--- the sampling itself, but instead uses the ADC Reader to read out the
--- ADC and initiate another conversion.
-	Sample_Controller : process (FCK) is
+-- the sampling itself, but instead uses the ADC Reader to read out one of
+-- the ADCs and initiate another conversion.
+	ADC_Controller : process (FCK) is
 		variable state, next_state : integer range 0 to 5 := 0;
 		variable adc_index : integer range 0 to 3 := 0;
 		variable X1SKIPL, X2SKIPL, X3SKIPL, X4SKIPL : boolean;
@@ -513,7 +534,7 @@ begin
 		end if;
 	end process;
 
--- Sample Reader starts reading one of the 14-bit ADCs when it detects 
+-- The ADC Reader starts reading one of the 14-bit ADCs when it detects 
 -- ADC Read (ADCRD). It waits until ADCRD is unasserted before returning
 -- to its rest state. When the reader has acquired a 14-bit sample,
 -- it updates the transmit time shift value using a linear shift 
@@ -525,8 +546,8 @@ begin
 -- performs a calibration read of twenty-four bits, with no shifting, no 
 -- accumulation, and no storage. This calibration read will cause the 
 -- ADC to self-calibrate provided that the calibration access is the 
--- first one after power-up. The Sample Reader runs off FCK.
-	Sample_Reader : process (RESET, FCK) is
+-- first one after power-up. The reader runs off FCK.
+	ADC_Reader : process (RESET, FCK) is
 		variable state, next_state : integer range 0 to 63 := 0;
 		constant calib_end : integer := 50;
 		constant read_end : integer := 40;
@@ -545,20 +566,24 @@ begin
 		if (RESET = '1') then
 			state := 0;
 			ADCBSY <= false;
-			ACCADD <= '0';
-			SMWRADC <= '0';
-			adc_data <= (others => '0');
+			ADCADD <= '0';
+			ADCWRSM <= '0';
+			ADCBIT <= '0';
+			ADCSHSD <= false;
 			transmit_shift <= (others => '1');
 
 		-- The reader initiates a conversion and reads one zero, 
 		-- fourteen data bits, and three trailing zeros. Calibration 
 		-- reads have nine trailing zeros instead.
 		elsif falling_edge(FCK) then
+			ADCSHSD <= false;
 
 			-- Shared state-counter logic.
 			if (state = 0) then
 				if ADCRD then
 					next_state := 1;
+					ADCBIT <= '0';
+					ADCSHSD <= true;
 				else
 					next_state := 0;
 				end if;
@@ -569,29 +594,26 @@ begin
 				next_state := state + 1;
 			end if;
 
-			-- Acquire ADC data.
-			if ADCCAL then
-				adc_data <= (others => '0');
-			else
-				if (state = 1) then
-					adc_data <= (others => '0');
-				end if;
+			-- Load three more zeros into the sample data word.
+			if (state >= 1) and (state <= 3) then
+				ADCBIT <= '0';
+				ADCSHSD <= true;
+			end if;
+				
+			-- Read fourteen data bits.
+			if (state >= 4) and (state <= 30)
+				and ((state mod 2) = 0) then
+				ADCBIT <= SDO;
+				ADCSHSD <= true;
+			end if;
 
-				-- Read fourteen ADC data bits.
-				if (state >= 4) and (state <= 30)
-					and ((state mod 2) = 0) then
-					adc_data(17 downto 1) <= adc_data(16 downto 0);
-					adc_data(0) <= SDO;
-				end if;
-
-				-- Programmable left shift, zero to four places.
-				if ((state = 32) and (adc_shift >= 1))
-					or ((state = 34) and (adc_shift >= 2))
-					or ((state = 36) and (adc_shift >= 3))
-					or ((state = 38) and (adc_shift >= 4)) then
-					adc_data(17 downto 1) <= adc_data(16 downto 0);
-					adc_data(0) <= '0';
-				end if;
+			-- Programmable left shift, zero to four places.
+			if ((state = 32) and (adc_shift >= 1))
+				or ((state = 34) and (adc_shift >= 2))
+				or ((state = 36) and (adc_shift >= 3))
+				or ((state = 38) and (adc_shift >= 4)) then
+				ADCBIT <= '0';
+				ADCSHSD <= true;
 			end if;
 
 			-- Shared SCK generation for normal and calibration reads.
@@ -607,7 +629,7 @@ begin
 			-- Update the transmit-scatter shift register.
 			if (state = 31) then
 				transmit_shift(3) <=
-					adc_data(0) xor transmit_shift(0);
+					sample_data(0) xor transmit_shift(0);
 				transmit_shift(2) <=
 					transmit_shift(3) xor transmit_shift(0);
 				transmit_shift(1) <= transmit_shift(2);
@@ -615,8 +637,8 @@ begin
 			end if;
 
 			-- Accumulator and sample-memory control.
-			ACCADD <= to_std_logic((state = read_end - 1) and (not ADCCAL));
-			SMWRADC <= to_std_logic((state = read_end) and (not ADCCAL));
+			ADCADD <= to_std_logic((state = read_end - 1) and (not ADCCAL));
+			ADCWRSM <= to_std_logic((state = read_end) and (not ADCCAL));
 
 			-- ADC busy flag.
 			ADCBSY <=
@@ -660,9 +682,11 @@ begin
 		if TDRST then
 			state := td_idle;
 			channel_index := 0;
+			TDRSTACC <= '0';
+			TDWRSM <= '0';
 		elsif rising_edge(FCK) then
-			ACCRST <= '0';
-			SMWRTD <= '0';
+			TDRSTACC <= '0';
+			TDWRSM <= '0';
 			TXI <= false;
 			next_state := td_wait;
 			
@@ -683,8 +707,8 @@ begin
 					next_state := td_clr;
 				end if;
 			elsif state = td_clr then
-				ACCRST <= '1';
-				SMWRTD <= '1';
+				TDRSTACC <= '1';
+				TDWRSM <= '1';
 				if channel_index = 3 then
 					next_state := td_done;
 				else
@@ -701,21 +725,21 @@ begin
 			-- the accumulator reset, then advance the index.
 			if (next_state = td_wait) or
 			   (state = td_done) then
-				sample_sel <= x1_sel;
+				tx_sel <= x1_sel;
 				tx_channel <= x1_channel;
 			else
 				case channel_index is
 					when 0 =>
-						sample_sel <= x1_sel;
+						tx_sel <= x1_sel;
 						tx_channel <= x1_channel;
 					when 1 =>
-						sample_sel <= x2_sel;
+						tx_sel <= x2_sel;
 						tx_channel <= x2_channel;
 					when 2 =>
-						sample_sel <= x3_sel;
+						tx_sel <= x3_sel;
 						tx_channel <= x3_channel;
 					when others =>
-						sample_sel <= x4_sel;
+						tx_sel <= x4_sel;
 						tx_channel <= x4_channel;
 				end case;
 			end if;
