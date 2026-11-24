@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DiamondModule name="CMDMEM" module="FIFO_DC" VendorName="Lattice Semiconductor Corporation" generator="IPexpress" date="2026 11 23 21:33:49.257" version="5.8" type="Module" synthesis="synplify" source_format="VHDL">
+  <Package>
+		<File name="CMDMEM.lpc" type="lpc" modified="2026 11 23 21:33:47.151"/>
+		<File name="CMDMEM.vhd" type="top_level_vhdl" modified="2026 11 23 21:33:47.213"/>
+		<File name="CMDMEM_tmpl.vhd" type="template_vhdl" modified="2026 11 23 21:33:47.213"/>
+		<File name="tb_CMDMEM_tmpl.vhd" type="testbench_vhdl" modified="2026 11 23 21:33:47.229"/>
+  </Package>
+</DiamondModule>

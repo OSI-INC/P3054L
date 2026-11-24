@@ -1106,7 +1106,7 @@ begin
 -- and we will stop processing the command. The Full flag is asserted when the buffer
 -- is a few bytes from full, so Command Memory Full (CMF) indicates an overflow and
 -- is cause for aborting processing.
-	Command_Memory : entity CMD_FIFO port map (
+	Command_Memory : entity CMDMEM port map (
 		Reset => CMRST, 
 		RPReset => '0',
 		WrClock => RCK,
