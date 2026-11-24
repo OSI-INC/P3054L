@@ -25,7 +25,7 @@
 -- Hard-code individual transmit periods and shifts. Update comments.
 
 -- V2.4 [23-NOV-26] Rename CMD_FIFO to CMDMEM. Disable transmission
--- only while command is incoming, allow while executing command.
+-- while command incoming, allow while executing.
 
 
 library ieee;  
@@ -57,47 +57,54 @@ entity main is
 		: out std_logic_vector(4 downto 0));
 		
 -- Identifier.
-	constant device_id : std_logic_vector(15 downto 0) := x"AA55";
-	constant wildcard_id : std_logic_vector(15 downto 0) := x"FFFF";
+	subtype device_id_type is std_logic_vector(15 downto 0);
+	constant device_id : device_id_type := x"AA55";
+	constant wildcard_id : device_id_type := x"FFFF";
 -- Configuration of the Ring Oscillator
-	constant fck_num_feeds : integer := 8;
-	constant fck_num_gates : integer := 26;
-	constant default_fck_mask : 
-		std_logic_vector(fck_num_feeds-1 downto 0) := x"10";
+	constant fck_num_feeds : natural := 8;
+	constant fck_num_gates : natural := 24;
+	subtype fck_mask_type is std_logic_vector(fck_num_feeds-1 downto 0);
+	constant default_fck_mask : fck_mask_type :=x"10";
 
 -- Configuration and Calibration of Transmitter.
-	constant td_channel_default : integer := 1;
-	constant frequency_step : integer := 1; 
-	constant frequency_low : integer := 6;
+	constant td_channel_default : natural := 1;
+	constant frequency_step : positive := 1; 
+	constant frequency_low : natural := 6;
 	
 -- Configuration of the Telemetry Manager
 	constant TMRUN : boolean := true; -- Run the Telemetry Protocol
-	constant tx_period : integer := 2; -- Shortest Period of All Signals
+	constant tx_period : natural := 2; -- Shortest Period of All Signals
 	
 -- Sample and Accumulate Constants
 	constant X1SKIP : boolean := false;
 	constant X2SKIP : boolean := false;
 	constant X3SKIP : boolean := false;
 	constant X4SKIP : boolean := false;
-	constant x1_sel : std_logic_vector(3 downto 0) := "0000";
-	constant x2_sel : std_logic_vector(3 downto 0) := "0001";
-	constant x3_sel : std_logic_vector(3 downto 0) := "0010";
-	constant x4_sel : std_logic_vector(3 downto 0) := "0011";
-	constant x1_pd : integer := 1;
-	constant x2_pd : integer := 2;
-	constant x3_pd : integer := 4;
-	constant x4_pd : integer := 8;
-	constant x1_shift : integer := 4;
-	constant x2_shift : integer := 3;
-	constant x3_shift : integer := 1;
-	constant x4_shift : integer := 0;
-	constant x1_channel : integer := 1;
-	constant x2_channel : integer := 3;
-	constant x3_channel : integer := 5;
-	constant x4_channel : integer := 7;	
+	constant smem_addr_len : positive := 4;
+	subtype smem_addr_type is std_logic_vector(smem_addr_len-1 downto 0);
+	constant x1_sel : smem_addr_type := "0000";
+	constant x2_sel : smem_addr_type := "0001";
+	constant x3_sel : smem_addr_type := "0010";
+	constant x4_sel : smem_addr_type := "0011";
+	constant x1_pd : natural := 1;
+	constant x2_pd : natural := 2;
+	constant x3_pd : natural := 4;
+	constant x4_pd : natural := 8;
+	constant x1_shift : natural := 4;
+	constant x2_shift : natural := 3;
+	constant x3_shift : natural := 1;
+	constant x4_shift : natural := 0;
+	constant x1_channel : natural := 1;
+	constant x2_channel : natural := 3;
+	constant x3_channel : natural := 5;
+	constant x4_channel : natural := 7;	
 end;
 
 architecture behavior of main is
+
+-- Generic types.
+	subtype byte_type is std_logic_vector(7 downto 0);
+	subtype nibble_type is std_logic_vector(3 downto 0);
 
 -- Attributes that request signals to be retained instead of distributed.
 	attribute syn_keep : boolean;
@@ -117,7 +124,7 @@ architecture behavior of main is
 -- the compiler to preserve the fck_mask bits or else FCK period will not be
 -- always increasing with mask bit index.
 	signal TCK, FCK, MCK, FCKEN : std_logic;
-	signal fck_mask : std_logic_vector(fck_num_feeds-1 downto 0);
+	signal fck_mask : fck_mask_type := default_fck_mask;
 	attribute syn_keep of TCK, FCK, FCKEN, fck_mask : signal is true;
 	attribute nomerge of TCK, FCK, FCKEN, fck_mask : signal is ""; 
 
@@ -144,10 +151,11 @@ architecture behavior of main is
 		: boolean := false;
 		
 -- Sample Memory and Accumulator
-	signal smem_data : std_logic_vector(17 downto 0); -- Sample Memory Output
-	signal acc_data : std_logic_vector(17 downto 0); -- Accumulator Output
-	signal sample_data : std_logic_vector(17 downto 0); -- Accumulator Input
-	signal smem_addr : std_logic_vector(3 downto 0); -- Sample Memory Addr
+	subtype smem_data_type is std_logic_vector(17 downto 0);
+	signal smem_data : smem_data_type; -- Sample Memory Output
+	signal acc_data : smem_data_type; -- Accumulator Output
+	signal sample_data : smem_data_type; -- Accumulator Input
+	signal smem_addr : smem_addr_type; -- Sample Memory Addr
 
 -- ADC Controller and ADC Reader
 	signal ADCCAL, -- Calibrate the Selected ADC
@@ -159,14 +167,15 @@ architecture behavior of main is
 		ADCBIT, -- ADC Bit for Sample Data
 		ADCADD -- ADC Reader Requests Addition
 		: std_logic;
-	signal adc_sel : std_logic_vector(3 downto 0); -- ADC Selector
+	signal adc_sel : smem_addr_type; -- ADC Selector
 	
 -- Telemetry Manager and Telemetry Dispatcher.
 	signal TDWRSM, -- Telemetry Dispatcher Writes to Sample Memory
 		TDRSTACC -- Telemetry Dispatcher Resets Accumulator
 		: std_logic;
-	signal td_sel : std_logic_vector(3 downto 0); -- Sample Selector
-	signal transmit_shift : std_logic_vector(3 downto 0);
+	signal td_sel : smem_addr_type; -- Sample Selector
+	subtype transmit_shift_type is std_logic_vector(3 downto 0);
+	signal transmit_shift : transmit_shift_Type;
 
 -- Message Transmission. The syn_keep and nomerge reduce code size slightly.
 	signal TXI, -- Transmit Initiate
@@ -177,7 +186,8 @@ architecture behavior of main is
 		: boolean := false;
 	attribute syn_keep of TXI, TXA : signal is true;
 	attribute nomerge of TXI, TXA : signal is "";  
-	signal td_channel : integer range 0 to 255;
+	constant max_channel_num : positive := 255;
+	signal td_channel : natural range 0 to max_channel_num;
 		
 -- Byte Receiver
 	signal RPS, -- Radio Frequency Power Synchronized
@@ -192,8 +202,9 @@ architecture behavior of main is
 		: boolean := false; 
 	
 -- Command Memory
-	signal cmd_in : std_logic_vector(7 downto 0); -- Command Memory Data In
-	signal cmd_out : std_logic_vector(7 downto 0); -- Command Memory Data Out
+	subtype cmd_data_type is std_logic_vector(7 downto 0);
+	signal cmd_in : cmd_data_type; -- Command Memory Data In
+	signal cmd_out : cmd_data_type; -- Command Memory Data Out
 	signal CME, -- Command Memory Empty
 		CMF, -- Command Memory Full
 		CMRST, -- Command Memory Reset
@@ -233,11 +244,11 @@ begin
 -- and RESET set HI. When RCK starts up, we use the falling edge to move the 
 -- chip into standby mode, then unassert RESET once we receive SFLAG from the
 -- Power Control Unit (PCU).
-	PowerUp: process (RCK) is
-		constant end_state : integer := 7;
-		constant clr_state : integer := 3;
-		constant stdby_state : integer := clr_state + 2;
-		variable state : integer range 0 to end_state := 0;
+	PowerUp: process (all) is
+		constant end_state : natural := 7;
+		constant clr_state : natural := 3;
+		constant stdby_state : natural := clr_state + 2;
+		variable state : natural range 0 to end_state := 0;
 	begin
 		if falling_edge(RCK) then
 			CLRFLAG <= to_std_logic(state = clr_state);
@@ -268,7 +279,7 @@ begin
 		);
 		
 -- The Transmit Clock is FCK divided by two.
-	Transmit_Clock : process (FCK) is
+	Transmit_Clock : process (all) is
 	begin
 		if falling_edge(FCK) then
 			TCK <= not TCK;
@@ -277,8 +288,8 @@ begin
 			
 -- The Millisecond Clock takes RCK, which is 32.768 kHz and divides
 -- by 32 to get 1.024 kHz, which we use as our millisecond clock.
-	Millisecond_Clock : process (RCK) is
-		variable mcnt : integer range 0 to 31;
+	Millisecond_Clock : process (all) is
+		variable mcnt : natural range 0 to 31;
 	begin
 		if RESET = '1' then
 			mcnt := 0;
@@ -307,13 +318,13 @@ begin
 -- Dispatcher. The signals are toggled rather than set, and their equality
 -- turns on FCK. We also have SCRST and TDRST to reset the controller and
 -- dispatcher.
-	Telemetry_Manager : process (RCK) is
-		constant tm_max : integer := 31;
-		constant tm_idle : integer := tm_max;
-		constant tm_update : integer := tm_max - 1;
-		constant tm_sample : integer := tm_max - 2;
-		variable state, next_state : integer range 0 to tm_max := 0;
-		variable tx_index : integer range 0 to tx_period-1;
+	Telemetry_Manager : process (all) is
+		constant tm_max : natural := 31;
+		constant tm_idle : natural := tm_max;
+		constant tm_update : natural := tm_max - 1;
+		constant tm_sample : natural := tm_max - 2;
+		variable state, next_state : natural range 0 to tm_max := 0;
+		variable tx_index : natural range 0 to tx_period-1;
 	begin
 		if RESET = '1' then
 			ENFCKTM <= false;
@@ -384,7 +395,7 @@ begin
 -- The Sample Register accepts an input value from one of the 
 -- sample-generating processes and shifts left in response to 
 -- any one of the shift signals provided by those same processes.
-	Sample_Register : process (RESET, FCK) is
+	Sample_Register : process (all) is
 	begin
 		if RESET = '1' then
 			sample_data <= (others => '0');
@@ -431,17 +442,17 @@ begin
 -- and adc_shift to match each ADC in turn. The controller does not perform
 -- the sampling itself, but instead uses the ADC Reader to read out one of
 -- the ADCs and initiate another conversion.
-	ADC_Controller : process (FCK) is
-		variable state, next_state : integer range 0 to 5 := 0;
-		variable adc_index : integer range 0 to 3 := 0;
+	ADC_Controller : process (all) is
+		variable state, next_state : natural range 0 to 5 := 0;
+		variable adc_index : natural range 0 to 3 := 0;
 		variable X1SKIPL, X2SKIPL, X3SKIPL, X4SKIPL : boolean;
 		variable skip_adc : boolean;
-		constant sc_idle  : integer := 0;
-		constant sc_check : integer := 1;
-		constant sc_start : integer := 2;
-		constant sc_adcw  : integer := 3;
-		constant sc_done  : integer := 4;
-		constant sc_wait  : integer := 5;
+		constant sc_idle  : natural := 0;
+		constant sc_check : natural := 1;
+		constant sc_start : natural := 2;
+		constant sc_adcw  : natural := 3;
+		constant sc_done  : natural := 4;
+		constant sc_wait  : natural := 5;
 	 
 	begin
 		if RESET = '1' then
@@ -551,11 +562,11 @@ begin
 -- accumulation, and no storage. This calibration read will cause the 
 -- ADC to self-calibrate provided that the calibration access is the 
 -- first one after power-up. The reader runs off FCK.
-	ADC_Reader : process (RESET, FCK) is
-		variable state, next_state : integer range 0 to 63 := 0;
-		constant calib_end : integer := 50;
-		constant read_end : integer := 40;
-		variable adc_shift : integer := 0;
+	ADC_Reader : process (all) is
+		variable state, next_state : natural range 0 to 63 := 0;
+		constant calib_end : natural := 50;
+		constant read_end : natural := 40;
+		variable adc_shift : natural := 0;
 	begin
 		-- Calculate the number of left shifts we should apply to the ADC
 		-- sample before passing it to the accumulator. 
@@ -665,15 +676,15 @@ begin
 -- It transmits four channels in sequence, ignoring the ADC disable-- flags. It ignores the individual transmit periods of the channels
 -- as well. This dispatcher is a place holder for a more sophisticated
 -- dispatcher coming later.
-	Telemetry_Dispatcher : process (RESET, FCK) is
-		variable state, next_state : integer range 0 to 5 := 0;
-		variable channel_index : integer range 0 to 3 := 0;
-		constant td_idle : integer := 0;
-		constant td_tx   : integer := 1;
-		constant td_wt   : integer := 2;
-		constant td_clr  : integer := 3;
-		constant td_done : integer := 4;
-		constant td_wait : integer := 5;
+	Telemetry_Dispatcher : process (all) is
+		variable state, next_state : natural range 0 to 5 := 0;
+		variable channel_index : natural range 0 to 3 := 0;
+		constant td_idle : natural := 0;
+		constant td_tx   : natural := 1;
+		constant td_wt   : natural := 2;
+		constant td_clr  : natural := 3;
+		constant td_done : natural := 4;
+		constant td_wait : natural := 5;
 	begin
 		if RESET = '1' then
 			TDACK <= false;
@@ -760,36 +771,35 @@ begin
 -- The Message Transmitter responds to Transmit Initiate (TXI) by turning on the 
 -- radio-frequency oscillator, reading sixteen bits from one of the sensors and
 -- transmitting the bits. The process runs off TCK, which is FCK divided by two,-- so FCK must be running.
-	Message_Transmitter : process (RESET, TCK) is
+	Message_Transmitter : process (all) is
 		variable channel_num, set_num, completion_code : 
-			integer range 0 to 15; -- set number for data
-		constant num_sync_bits : integer := 11; -- Num synchronizing bits at start.
-		constant num_id_bits : integer := 4; -- Number of ID bits.
-		constant num_start_bits : integer := 1; -- Num zero start bits.
-		constant num_stop_bits : integer := 2; -- For state machine termination only.
-		constant num_data_bits : integer := 16; -- Number of ADC data bits.
-		constant num_xmit_bits : integer := -- Number of transmission bit periods.
+			natural range 0 to 15; -- set number for data
+		constant num_sync_bits : natural := 11; -- Num synchronizing bits at start.
+		constant num_id_bits : natural := 4; -- Number of ID bits.
+		constant num_start_bits : natural := 1; -- Num zero start bits.
+		constant num_stop_bits : natural := 2; -- For state machine termination only.
+		constant num_data_bits : natural := 16; -- Number of ADC data bits.
+		constant num_xmit_bits : natural := -- Number of transmission bit periods.
 			num_sync_bits + num_start_bits + num_id_bits + num_data_bits + num_id_bits; 
-		constant st_idle : integer := 0; -- Idle state value.
-		constant first_sync_bit : integer := 1; -- First transmit state.
-		constant first_start_bit : integer := first_sync_bit + num_sync_bits;
-		constant first_id_bit : integer := first_start_bit + num_start_bits;
-		constant first_data_bit : integer := first_id_bit + num_id_bits;
-		constant first_cc_bit : integer := first_data_bit + num_data_bits;
-		constant st_done : integer := -- Final state of sample transmit machine.
+		constant st_idle : natural := 0; -- Idle state value.
+		constant first_sync_bit : natural := 1; -- First transmit state.
+		constant first_start_bit : natural := first_sync_bit + num_sync_bits;
+		constant first_id_bit : natural := first_start_bit + num_start_bits;
+		constant first_data_bit : natural := first_id_bit + num_id_bits;
+		constant first_cc_bit : natural := first_data_bit + num_data_bits;
+		constant st_done : natural := -- Final state of sample transmit machine.
 			num_xmit_bits + num_stop_bits; 
-		variable channel_bits : std_logic_vector(3 downto 0);
-		variable cc_bits : std_logic_vector(3 downto 0);
-		variable state, next_state : integer range 0 to 63; -- Stample Transmit State
+		variable channel_bits : nibble_type;
+		variable cc_bits : nibble_type;
+		variable state, next_state : natural range 0 to 63; -- Stample Transmit State
 	begin
 		-- The channel number, set number, and completion code are a function of the 
 		-- device id and the channel offset, which we calculate here.
 		channel_num := td_channel mod 16;
 		set_num := td_channel / 16;
 		completion_code := (15 - channel_num + set_num) mod 16;
-		channel_bits := std_logic_vector(to_unsigned(channel_num,4));
-		cc_bits := std_logic_vector(to_unsigned(completion_code,4));
-		
+		channel_bits := nibble_type(to_unsigned(channel_num,4));
+		cc_bits := nibble_type(to_unsigned(completion_code,4));		
 		-- Upon startup, we make sure we are in the idle state.
 		if (RESET = '1') then 
 			state := 0;
@@ -862,7 +872,7 @@ begin
 -- output (xdac) between the HI and LO frequency values. These values are turned
 -- into analog voltages on the TUNE input of the radio frequency oscillator, and
 -- so modulate the frequency of the transmission.
-	Frequency_Modulation : process (RESET, FCK) is
+	Frequency_Modulation : process (all) is
 	begin
 		if RESET = '1' then
 			xdac <= (others => '0');
@@ -897,7 +907,7 @@ begin
 	end process;
 	
 -- The Receive Power signal must be synchronized with the RCK clock.
-	Synchronize_RP: process (RESET, RCK) is 
+	Synchronize_RP: process (all) is 
 	begin
 		if RESET = '1' then
 			RPS <= false;
@@ -908,9 +918,9 @@ begin
 	
 -- We detect a long enough burst of command power to initiate
 -- command reception, and set the ICMD signal.
-	Initiate_Command: process (RPS, MCK) is 
-		constant endcount : integer := 2;
-		variable counter : integer range 0 to 3;
+	Initiate_Command: process (all) is 
+		constant endcount : natural := 2;
+		variable counter : natural range 0 to 3;
 	begin
 		if (not RPS) then
 			ICMD <= false;
@@ -928,9 +938,9 @@ begin
 	
 -- We detect a long enough period without command power to 
 -- terminate command reception, and set the TCMD signal.
-	Terminate_Command: process (RPS, MCK) is 
-		constant endcount : integer := 7;
-		variable counter : integer range 0 to 7;
+	Terminate_Command: process (all) is 
+		constant endcount : natural := 7;
+		variable counter : natural range 0 to 7;
 	begin
 		if RPS then
 			counter := 0;
@@ -949,7 +959,7 @@ begin
 -- The Receive Command (RCMD) signal indicates that a command is being 
 -- received. We set RCMD when Initiate Command (ICMD) occurs, and we clear
 -- RCMD when Terminate Command (TCMD) occurs.
-	Receive_Command: process (RESET, RCK) is
+	Receive_Command: process (all) is
 	begin
 		if RESET = '1' then
 			RCMD <= false;
@@ -967,9 +977,9 @@ begin
 -- bytes arrive at 8192 bps. We use RCK, which is 32.768 kHz to detect
 -- the rising edge of a start bit and then sample the center of the
 -- subsequent bits to obtain a byte.
-	Byte_Receiver: process (RESET, RCK) is
-		constant end_state : integer := 39;
-		variable state, next_state : integer range 0 to end_state;
+	Byte_Receiver: process (all) is
+		constant end_state : natural := 39;
+		variable state, next_state : natural range 0 to end_state;
 	begin
 		if RESET = '1' then
 			state := 0;
@@ -1060,7 +1070,7 @@ begin
 -- end of a command, there was some error during reception. We use the Command
 -- Bit Strobe (CBS) signal to clock crc, because CBS is asserted only when a command 
 -- data bit is received, not when we receive a start or stop bit.
-	Error_Check : process (RESET, RCK) is
+	Error_Check : process (all) is
 		variable crc, next_crc : std_logic_vector(15 downto 0);
 	begin
 		if RESET = '1' then
@@ -1124,22 +1134,22 @@ begin
 -- It stores command bytes in the Command Memory until it detects Terminate Command (TCMD). If
 -- the Error Check reports no error, the processor proceeds to read the instructions of the
 -- command out of the command memory and execute them. 
-	Command_Processor: process (RESET, RCK) is
+	Command_Processor: process (all) is
 		
 		-- General-purpose state names for the Command Processor
-		constant idle_s : integer := 0;
-		constant receive_cmd_s : integer := 1;
-		constant store_cmd_s : integer := 2;
-		constant check_full_s : integer := 3;
-		constant check_cmd_s : integer := 4;
-		constant read_id_hi_s : integer := 5;
-		constant check_id_s : integer := 6;
-		constant check_empty_s : integer := 7;
-		constant interpret_opcode_s : integer := 8;
-		constant set_fck_mask_s : integer := 9;
+		constant idle_s : natural := 0;
+		constant receive_cmd_s : natural := 1;
+		constant store_cmd_s : natural := 2;
+		constant check_full_s : natural := 3;
+		constant check_cmd_s : natural := 4;
+		constant read_id_hi_s : natural := 5;
+		constant check_id_s : natural := 6;
+		constant check_empty_s : natural := 7;
+		constant interpret_opcode_s : natural := 8;
+		constant set_fck_mask_s : natural := 9;
 		
 		-- Variables and constants for the Command Processor
-		variable state, next_state : integer range 0 to 15;
+		variable state, next_state : natural range 0 to 15;
 		
 	begin
 		-- We reset to the idle state on global RESET.
