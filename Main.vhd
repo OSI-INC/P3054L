@@ -91,6 +91,10 @@ entity main is
 	constant x2_sel : smem_addr_type := "0001";
 	constant x3_sel : smem_addr_type := "0010";
 	constant x4_sel : smem_addr_type := "0011";
+	constant x1_pd : natural := 4;
+	constant x2_pd : natural := 4;
+	constant x3_pd : natural := 4;
+	constant x4_pd : natural := 4;
 	constant x1_shift : natural := 2;
 	constant x2_shift : natural := 2;
 	constant x3_shift : natural := 2;
@@ -130,31 +134,25 @@ architecture behavior of main is
 	attribute nomerge of TCK, FCK, FCKEN, fck_mask : signal is ""; 
 
 -- Clock Control. 
-	signal ENFCKTM : boolean; -- Enable Fast Clock, from Telemetry Manager
-	signal SRCK, -- RCK Synchronized with FCK
-		SSRCK -- SRCK Delayed by one FCK Period
-		: std_logic; 
-	attribute syn_keep of ENFCKTM : signal is true;
-	attribute nomerge of ENFCKTM : signal is "";
+	signal ENFCK : boolean; -- Enable Fast Clock
+	attribute syn_keep of ENFCK : signal is true;
+	attribute nomerge of ENFCK : signal is "";
 
--- Sample Controller
-	signal SCRQ, -- Sample Controller Request
-		SCACK, -- Sample Controller Acknowledge
-		SCBSY -- Sample Controller Busy
-		: boolean := false;
-
--- Telemetry Manager and Dispatcher
-	signal TDRST, -- Telemetry Dispatcher Reset
-		TDRQ, -- Telemetry Dispatcher Request
-		TDACK -- Telemetry Dispatcher Acknowledge
-		: boolean := false;
-		
 -- Sample Memory and Accumulator
 	subtype smem_data_type is std_logic_vector(17 downto 0);
 	signal smem_data : smem_data_type; -- Sample Memory Output
 	signal acc_data : smem_data_type; -- Accumulator Output
 	signal sample_data : smem_data_type; -- Accumulator Input
 	signal smem_addr : smem_addr_type; -- Sample Memory Addr
+
+-- Telemetry Manager
+	signal tm_addr : smem_addr_type; -- Manager Sample Select
+		
+-- Sample Controller
+	signal SCRQ, -- Sample Controller Request
+		SCACK, -- Sample Controller Acknowledge
+		SCBSY -- Sample Controller Busy
+		: boolean := false;
 
 -- ADC Controller and ADC Reader
 	signal ADCCAL, -- Calibrate the Selected ADC
@@ -167,13 +165,16 @@ architecture behavior of main is
 		ADCBIT, -- ADC Bit for Sample Data
 		ADCADD -- ADC Reader Requests Addition
 		: std_logic;
-	signal adc_sel : smem_addr_type; -- ADC Selector
 	
--- Telemetry Manager and Telemetry Dispatcher.
+-- Telemetry Dispatcher.
 	signal TDWRSM, -- Telemetry Dispatcher Writes to Sample Memory
 		TDRSTACC -- Telemetry Dispatcher Resets Accumulator
 		: std_logic;
-	signal td_sel : smem_addr_type; -- Sample Selector
+	signal TDRQ, -- Telemetry Dispatcher Request
+		TDACK, -- Telemetry Dispatcher Acknowledge
+		TDBSY -- Telemetry Dispatcher Busy
+		: boolean := false;
+	signal td_addr : smem_addr_type; -- Dispatcher Sample Select
 	subtype transmit_shift_type is std_logic_vector(3 downto 0);
 	signal transmit_shift : transmit_shift_Type;
 
@@ -265,8 +266,10 @@ begin
 	end process;	
 
 -- The Fast Clock entity produces FCK. The ring oscillator should be 
--- calibrated so that it produces FCK of 10 MHz.
-	FCKEN <= to_std_logic(ENFCKTM);
+-- calibrated so that it produces FCK of 10 MHz. The Fast Clock is
+-- enabled whenever the request and acknowledgment signals of one of
+-- our acquisition or dispatch processes are not equal.
+	ENFCK <= (SCRQ xor SCACK) or (TDRQ xor TDACK);
 	Fast_Clock : entity ring_oscillator 
 		generic map (
 			num_gates => fck_num_gates,
@@ -347,7 +350,6 @@ begin
 		variable state, next_state : natural range 0 to cycle_len-1;
 	begin
 		if (RESET = '1') or (not TMRUN) then
-			ENFCKTM <= false;
 			SCRQ <= false;
 			TDRQ <= false;
 			state := 0;
@@ -362,8 +364,6 @@ begin
 
 			state := next_state;
 		end if;
-
-		ENFCKTM <= (SCRQ xor SCACK) or (TDRQ xor TDACK);
 	end process;
 
 -- The Sample Memory is eighteen bits wide so as to accommodate
@@ -394,15 +394,14 @@ begin
 		end if;
 	end process;
 
--- The Sample Memory Address Multiplexer sets the sample memory 
--- address equal to the address specified by one of the 
--- sample-generating processes.
-	Sample_Addr : process (all) is 
+-- The Sample Address Multiplexer chooses either the Telemetry-- Dispatcher address or the Telemetry Manager address for the
+-- Sample Memory. The Telemetry Dispatcher takes priority.
+	Sample_Addr_Mux : process (all) is 
 	begin
-		if SCBSY then
-			smem_addr <= adc_sel;
+		if TDBSY then
+			smem_addr <= td_addr;
 		else
-			smem_addr <= td_sel;
+			smem_addr <= tm_addr;
 		end if;
 	end process;
 		
@@ -425,7 +424,7 @@ begin
 -- that it has completed its sampling by toggling the SCACK signal. The 
 -- controller obtains a sample from each ADC for which the skip flag is 
 -- clear. It latches the state of the four skip flags when it is idle or else
--- the firmware will freeze occasionally on RESET. The controller sets adc_sel 
+-- the firmware will freeze occasionally on RESET. The controller sets tm_addr 
 -- and adc_shift to match each ADC in turn. The controller does not perform
 -- the sampling itself, but instead uses the ADC Reader to read out one of
 -- the ADCs and initiate another conversion.
@@ -451,7 +450,7 @@ begin
 
 		if RESET = '1' then
 			ADCRD <= false;
-			adc_sel <= x1_sel;
+			tm_addr <= x1_sel;
 			state := sc_idle;
 			adc_index := 0;
 			X1SKIPL := X1SKIP;
@@ -463,16 +462,16 @@ begin
 			
 			case adc_index is
 				when 0 =>
-					adc_sel <= x1_sel;
+					tm_addr <= x1_sel;
 					skip_adc := X1SKIPL;
 				when 1 =>
-					adc_sel <= x2_sel;
+					tm_addr <= x2_sel;
 					skip_adc := X2SKIPL;
 				when 2 =>
-					adc_sel <= x3_sel;
+					tm_addr <= x3_sel;
 					skip_adc := X3SKIPL;
 				when others =>
-					adc_sel <= x4_sel;
+					tm_addr <= x4_sel;
 					skip_adc := X4SKIPL;
 			end case;
 
@@ -480,7 +479,7 @@ begin
 			case state is
 				when sc_idle =>
 					adc_index := 0;
-					adc_sel <= x1_sel;
+					tm_addr <= x1_sel;
 					if SCRQ xor SCACK then
 						next_state := sc_check;
 					else
@@ -514,11 +513,11 @@ begin
 						next_state := sc_check;
 					end if;
 				when sc_done =>
-					adc_sel <= x1_sel;
+					tm_addr <= x1_sel;
 					next_state := sc_idle;
 					SCACK <= SCRQ;
 				when others =>
-					adc_sel <= x1_sel;
+					tm_addr <= x1_sel;
 					next_state := sc_idle;
 			end case;
 
@@ -549,11 +548,12 @@ begin
 	begin
 		-- Calculate the number of left shifts we should apply to the ADC
 		-- sample before passing it to the accumulator. 
-		case adc_sel is
+		case tm_addr is
 			when x1_sel => adc_shift := x1_shift;
 			when x2_sel => adc_shift := x2_shift;
 			when x3_sel => adc_shift := x3_shift;
 			when x4_sel => adc_shift := x4_shift;
+			when others => adc_shift := 0;
 		end case;
 
 		-- Upon startup, make sure we are in the idle state and
@@ -663,10 +663,10 @@ begin
 		end if;
 
 		-- Select the ADC using the top two bits of the sample address.
-		NADC1 <= to_std_logic(not (ADCCS and (adc_sel = x1_sel)));
-		NADC2 <= to_std_logic(not (ADCCS and (adc_sel = x2_sel)));
-		NADC3 <= to_std_logic(not (ADCCS and (adc_sel = x3_sel)));
-		NADC4 <= to_std_logic(not (ADCCS and (adc_sel = x4_sel)));
+		NADC1 <= to_std_logic(not (ADCCS and (tm_addr = x1_sel)));
+		NADC2 <= to_std_logic(not (ADCCS and (tm_addr = x2_sel)));
+		NADC3 <= to_std_logic(not (ADCCS and (tm_addr = x3_sel)));
+		NADC4 <= to_std_logic(not (ADCCS and (tm_addr = x4_sel)));
 	end process;
 
 -- The Telemetry Dispatcher runs off FCK and is reset by TDRST. It
@@ -689,6 +689,7 @@ begin
 			channel_index := 0;
 			tx_idx := 0;
 			td_channel <= 0;
+			TDBSY <= false;
 			TDRSTACC <= '0';
 			TDWRSM <= '0';
 			TDACK <= false;
@@ -739,22 +740,24 @@ begin
 			-- the accumulator reset, then advance the index.
 			case channel_index is
 				when 0 =>
-					td_sel <= x1_sel;
+					td_addr <= x1_sel;
 					td_channel <= x1_channel;
 				when 1 =>
-					td_sel <= x2_sel;
+					td_addr <= x2_sel;
 					td_channel <= x2_channel;
 				when 2 =>
-					td_sel <= x3_sel;
+					td_addr <= x3_sel;
 					td_channel <= x3_channel;
 				when others =>
-					td_sel <= x4_sel;
+					td_addr <= x4_sel;
 					td_channel <= x4_channel;
 			end case;
 
 			if (state = td_clr) and (channel_index < 3) then
 				channel_index := channel_index + 1;
 			end if;
+			
+			TDBSY <= (state /= td_idle);
 
 			state := next_state;
 		end if;
