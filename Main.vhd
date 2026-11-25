@@ -147,7 +147,6 @@ architecture behavior of main is
 	signal ADCCAL, -- Calibrate the Selected ADC
 		ADCRQ, -- Request ADC Read
 		ADCACK, -- Acknowledge ADC Read
-		ADCCS, -- ADC Busy
 		ADCSHSD -- ADC Reader Shifts Sample Data
 		: boolean := false;
 	signal ADCWRSM, -- ADC Reader Write to Sample Memory
@@ -445,18 +444,18 @@ begin
 	ADC_Reader : process (all) is
 		variable state, next_state : natural range 0 to 63 := 0;
 		constant calib_end : natural := 50;
-		constant read_end : natural := 40;
-		variable adc_shift : natural := 0;
+		constant read_end : natural := 41;
+		variable CS : boolean;
 	begin
 		-- Upon startup, make sure we are in the idle state and
 		-- our flags are disabled.
 		if (RESET = '1') then
 			state := 0;
-			ADCCS <= false;
 			ADCADD <= '0';
 			ADCWRSM <= '0';
 			ADCBIT <= '0';
 			ADCSHSD <= false;
+			ADCACK <= false;
 			transmit_shift <= (others => '1');
 
 		-- The reader loads four leading zeros into the sample data
@@ -541,23 +540,22 @@ begin
 			end if;
 
 			-- Accumulator and sample-memory control.
-			ADCADD <= to_std_logic((state = read_end - 1) and (not ADCCAL));
-			ADCWRSM <= to_std_logic((state = read_end) and (not ADCCAL));
+			ADCADD <= to_std_logic((state = read_end - 2) and (not ADCCAL));
+			ADCWRSM <= to_std_logic((state = read_end - 1) and (not ADCCAL));
 
-			-- ADC Busy flag, which we use to set the chip select lines.
-			ADCCS <= (state > 0)
-				and (state < calib_end)
-				and (ADCCAL or (state < read_end));
-				
 			-- Assign new state value.
 			state := next_state;
 		end if;
 
-		-- Select the ADC using the sample address.
-		NADC1 <= to_std_logic(not (ADCCS and (tm_addr = x1_addr)));
-		NADC2 <= to_std_logic(not (ADCCS and (tm_addr = x2_addr)));
-		NADC3 <= to_std_logic(not (ADCCS and (tm_addr = x3_addr)));
-		NADC4 <= to_std_logic(not (ADCCS and (tm_addr = x4_addr)));
+		-- Drive the correct ADC chip select line low for the entire
+		-- time the reader is busy. We use the tm_addr to pick the
+		-- ADC.
+		CS := (state > 0) and (state < calib_end)
+			and (ADCCAL or (state < read_end - 2));		
+		NADC1 <= to_std_logic(not (CS and (tm_addr = x1_addr)));
+		NADC2 <= to_std_logic(not (CS and (tm_addr = x2_addr)));
+		NADC3 <= to_std_logic(not (CS and (tm_addr = x3_addr)));
+		NADC4 <= to_std_logic(not (CS and (tm_addr = x4_addr)));
 	end process;
 
 -- The Telemetry Dispatcher runs off the falling edge of FCK. It
@@ -602,13 +600,14 @@ begin
 				case state is
 					when td_idle =>
 						next_state := td_tx1;
+						
+					-- Transmit the X1 sample.
 					when td_tx1 =>
+						td_channel <= x1_channel;
+						td_addr <= x1_addr;
 						if (x1_pd = 0) then
 							next_state := td_tx2;
 						elsif (x1_idx = 0) then
-							x1_idx := x1_pd-1;
-							td_channel <= x1_channel;
-							td_addr <= x1_addr;
 							TXI <= true;
 							if TXA then
 								next_state := td_wx1;
@@ -628,9 +627,41 @@ begin
 					when td_cx1 =>
 						TDRSTACC <= '1';
 						TDWRSM <= '1';
+						x1_idx := x1_pd-1;
 						next_state := td_tx2;
+
+					-- Transmit the X2 sample.
 					when td_tx2 =>
+						td_channel <= x2_channel;
+						td_addr <= x2_addr;
+						if (x2_pd = 0) then
+							next_state := td_tx3;
+						elsif (x2_idx = 0) then
+							TXI <= true;
+							if TXA then
+								next_state := td_wx2;
+							else
+								next_state := td_tx2;
+							end if;
+						else
+							x2_idx := x2_idx-1;
+							next_state := td_tx3;
+						end if;
+					when td_wx2 =>
+						if TXA then
+							next_state := td_wx2;
+						else
+							next_state := td_cx2;
+						end if;
+					when td_cx2 =>
+						TDRSTACC <= '1';
+						TDWRSM <= '1';
+						x2_idx := x2_pd-1;
+						next_state := td_tx3;
+
+					when td_tx3 =>
 						next_state := td_done;
+
 					when td_done => 
 						next_state := td_idle;
 						TDACK <= TDRQ;
@@ -641,7 +672,7 @@ begin
 				next_state := td_idle;
 			end if;
 
-			TDBSY <= (state > td_idle) and (state < td_done);
+			TDBSY <= (next_state /= td_idle);
 
 			state := next_state;
 		end if;
@@ -1163,6 +1194,5 @@ begin
 		CPA <= (state /= idle_s);
 	end process;
 	
-	MSR <= MCK;
-	TP <= to_std_logic(TXA);
+	TP <= to_std_logic(FCKEN);
 end behavior;
