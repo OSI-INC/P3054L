@@ -145,6 +145,7 @@ architecture behavior of main is
 		
 -- ADC Controller and ADC Reader
 	signal ADCCAL, -- Calibrate the Selected ADC
+		ADCCS, -- ADC Chip Select
 		ADCRQ, -- Request ADC Read
 		ADCACK, -- Acknowledge ADC Read
 		ADCSHSD -- ADC Reader Shifts Sample Data
@@ -445,12 +446,12 @@ begin
 		variable state, next_state : natural range 0 to 63 := 0;
 		constant calib_end : natural := 50;
 		constant read_end : natural := 41;
-		variable CS : boolean;
 	begin
 		-- Upon startup, make sure we are in the idle state and
 		-- our flags are disabled.
 		if (RESET = '1') then
 			state := 0;
+			ADCCS <= false;
 			ADCADD <= '0';
 			ADCWRSM <= '0';
 			ADCBIT <= '0';
@@ -543,19 +544,18 @@ begin
 			ADCADD <= to_std_logic((state = read_end - 2) and (not ADCCAL));
 			ADCWRSM <= to_std_logic((state = read_end - 1) and (not ADCCAL));
 
+			-- Assert the chip select line flag.
+			ADCCS <= (state > 0) and (state < calib_end)
+				and (ADCCAL or (state < read_end - 2));
+
 			-- Assign new state value.
 			state := next_state;
 		end if;
 
-		-- Drive the correct ADC chip select line low for the entire
-		-- time the reader is busy. We use the tm_addr to pick the
-		-- ADC.
-		CS := (state > 0) and (state < calib_end)
-			and (ADCCAL or (state < read_end - 2));		
-		NADC1 <= to_std_logic(not (CS and (tm_addr = x1_addr)));
-		NADC2 <= to_std_logic(not (CS and (tm_addr = x2_addr)));
-		NADC3 <= to_std_logic(not (CS and (tm_addr = x3_addr)));
-		NADC4 <= to_std_logic(not (CS and (tm_addr = x4_addr)));
+		NADC1 <= to_std_logic(not (ADCCS and (tm_addr = x1_addr)));
+		NADC2 <= to_std_logic(not (ADCCS and (tm_addr = x2_addr)));
+		NADC3 <= to_std_logic(not (ADCCS and (tm_addr = x3_addr)));
+		NADC4 <= to_std_logic(not (ADCCS and (tm_addr = x4_addr)));
 	end process;
 
 -- The Telemetry Dispatcher runs off the falling edge of FCK. It
@@ -659,12 +659,68 @@ begin
 						x2_idx := x2_pd-1;
 						next_state := td_tx3;
 
+					-- Transmit the X3 sample.
 					when td_tx3 =>
-						next_state := td_done;
+						td_channel <= x3_channel;
+						td_addr <= x3_addr;
+						if (x3_pd = 0) then
+							next_state := td_tx4;
+						elsif (x3_idx = 0) then
+							TXI <= true;
+							if TXA then
+								next_state := td_wx3;
+							else
+								next_state := td_tx3;
+							end if;
+						else
+							x3_idx := x3_idx-1;
+							next_state := td_tx4;
+						end if;
+					when td_wx3 =>
+						if TXA then
+							next_state := td_wx3;
+						else
+							next_state := td_cx3;
+						end if;
+					when td_cx3 =>
+						TDRSTACC <= '1';
+						TDWRSM <= '1';
+						x3_idx := x3_pd-1;
+						next_state := td_tx4;
 
+					-- Transmit the X4 sample.
+					when td_tx4 =>
+						td_channel <= x4_channel;
+						td_addr <= x4_addr;
+						if (x4_pd = 0) then
+							next_state := td_done;
+						elsif (x4_idx = 0) then
+							TXI <= true;
+							if TXA then
+								next_state := td_wx4;
+							else
+								next_state := td_tx4;
+							end if;
+						else
+							x4_idx := x4_idx-1;
+							next_state := td_done;
+						end if;
+					when td_wx4 =>
+						if TXA then
+							next_state := td_wx4;
+						else
+							next_state := td_cx4;
+						end if;
+					when td_cx4 =>
+						TDRSTACC <= '1';
+						TDWRSM <= '1';
+						x4_idx := x4_pd-1;
+						next_state := td_done;
+						
 					when td_done => 
 						next_state := td_idle;
 						TDACK <= TDRQ;
+						
 					when others =>
 						next_state := td_idle;
 				end case;
