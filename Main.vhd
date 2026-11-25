@@ -123,20 +123,16 @@ architecture behavior of main is
 	signal SFLAG, STDBY : std_logic;
 	signal SWRST : boolean := false;
 	
--- Ring Oscillator, Fast Clock, and Transmit Clock. We retain all these signals
--- as nodes in the logic to stop the compiler from spreading them around, which
--- makes the ring oscillator period vary from one compile to the next. We want
--- the compiler to preserve the fck_mask bits or else FCK period will not be
--- always increasing with mask bit index.
-	signal TCK, FCK, MCK, FCKEN : std_logic;
+-- Ring Oscillator, Fast Clock, and Transmit Clock. We want the 
+-- compiler to preserve the fck_mask bits or else FCK period will 
+-- not be always increasing with mask bit index. We find the period
+-- of the ring oscillator is more consistent from one compile to 
+-- the next if we preserve the control signals too.
+	signal TCK, FCK, MCK : std_logic;
+	signal FCKEN : boolean; 
 	signal fck_mask : fck_mask_type := default_fck_mask;
 	attribute syn_keep of TCK, FCK, FCKEN, fck_mask : signal is true;
 	attribute nomerge of TCK, FCK, FCKEN, fck_mask : signal is ""; 
-
--- Clock Control. 
-	signal ENFCK : boolean; -- Enable Fast Clock
-	attribute syn_keep of ENFCK : signal is true;
-	attribute nomerge of ENFCK : signal is "";
 
 -- Sample Memory and Accumulator
 	subtype smem_data_type is std_logic_vector(17 downto 0);
@@ -271,7 +267,7 @@ begin
 -- calibrated so that it produces FCK of 10 MHz. The Fast Clock is
 -- enabled whenever the request and acknowledgment signals of one of
 -- our acquisition or dispatch processes are not equal.
-	ENFCK <= (SCRQ xor SCACK) or (TDRQ xor TDACK);
+	FCKEN <= (SCRQ xor SCACK) or (TDRQ xor TDACK);
 	Fast_Clock : entity ring_oscillator 
 		generic map (
 			num_gates => fck_num_gates,
@@ -283,30 +279,13 @@ begin
 			CK => FCK
 		);
 		
--- The Transmit Clock is FCK divided by two.
+-- The Transmit Clock is FCK divided by two, clocked on the
+-- falling edge of FCK.
 	Transmit_Clock : process (all) is
 	begin
 		if falling_edge(FCK) then
 			TCK <= not TCK;
 		end if;
-	end process;
-			
--- The Millisecond Clock takes RCK, which is 32.768 kHz and divides
--- by 32 to get 1.024 kHz, which we use as our millisecond clock.
-	Millisecond_Clock : process (all) is
-		constant rck_per_ms : positive := 32;
-		variable mcnt : natural range 0 to rck_per_ms-1;
-	begin
-		if RESET = '1' then
-			mcnt := 0;
-		elsif falling_edge(RCK) then
-			mcnt := (mcnt + 1) mod rck_per_ms;
-			if (mcnt <= 15) then
-				MCK <= '0';
-			else
-				MCK <= '1';
-			end if;
-		end if;	
 	end process;
 		
 -- The Telemetry Manager cycles through thirty-two states. It runs-- off the rising edge of RCK, and so completes its cycles at 
@@ -346,7 +325,11 @@ begin
 -- acquisition process using the least significant bits of ADC samples.
 -- The dispatcher runs off the falling edge of FCK and interacts with 
 -- the manager in the same way as do acquisition processes: with a 
--- request and acknowledge toggle handshake. 
+-- request and acknowledge toggle handshake.--
+-- We can disable all acquisition and dispatch by setting the TMRUN 
+-- flag to false. The Telemetry Manager will keep running through its
+-- cycle, which means it can still provide the millisecond clock (MCK),
+-- which is used by other processes for measuring intervals.
 	Telemetry_Manager : process (all) is
 		constant cycle_len : positive := 32;
 		variable state, next_state : natural range 0 to cycle_len-1;
@@ -354,17 +337,26 @@ begin
 		if (RESET = '1') or (not TMRUN) then
 			SCRQ <= false;
 			TDRQ <= false;
+			MCK <= '0';
 			state := 0;
 		elsif rising_edge(RCK) then
 			next_state := (state + 1) mod cycle_len;
 
-			if (state = 2) then
-				SCRQ <= not SCRQ;
-			elsif (state = to_integer(unsigned(transmit_shift))+16) then
-				TDRQ <= not TDRQ;
+			if TMRUN then 
+				if (state = 2) then
+					SCRQ <= not SCRQ;
+				elsif (state = to_integer(unsigned(transmit_shift))+16) then
+					TDRQ <= not TDRQ;
+				end if;
+			end if;
+			
+			if (state <= 15) then
+				MCK <= '0';
+			else
+				MCK <= '1';
 			end if;
 
-			state := next_state;
+		state := next_state;
 		end if;
 	end process;
 
@@ -645,7 +637,7 @@ begin
 			ADCADD <= to_std_logic((state = read_end - 1) and (not ADCCAL));
 			ADCWRSM <= to_std_logic((state = read_end) and (not ADCCAL));
 
-			-- ADC Chip Select and ADC Busy busy flags.
+			-- ADC Busy flag.
 			ADCBSY <= (state > 0)
 				and (state < calib_end)
 				and (ADCCAL or (state < read_end));
@@ -1151,7 +1143,6 @@ begin
 			RBI <= false;
 			CMWR <= '0';
 			CMRD <= '0';
-			MSR <= '0';
 		
 			-- Idle State.
 			if (state = idle_s) then
@@ -1179,15 +1170,16 @@ begin
 				RBI <= true;
 			end if;
 			
-			-- Store the new command byte in the command memory. We assert Command
-			-- Memory Write (CMWR) for one clock cycle.
+			-- Store the new command byte in the command memory. We assert 
+			-- Command Memory Write (CMWR) for one clock cycle.
 			if (state = store_cmd_s) then 
 				next_state := check_full_s;
 				CMWR <= '1';
 			end if;
 			
 			-- Check if the Command Memory is full. If so, abort. Otherwise, we 
-			-- wait for RBD to be unasserted before receiving the next command byte.
+			-- wait for RBD to be unasserted before receiving the next command 
+			-- byte.
 			if (state = check_full_s) then
 				if (CMF = '1') then
 					next_state := idle_s;
@@ -1201,8 +1193,8 @@ begin
 			-- There are two possible sources of error: a failure in the cyclic 
 			-- redundancy check (CRCERR) or an empty command memory (CME). If 
 			-- either of these are asserted, we go back to idle and discard the 
-			-- command. Whether the command is valid or not, we assert CMRD to clock 
-			-- the first byte out of the command memory FIFO. 
+			-- command. Whether the command is valid or not, we assert CMRD to 
+			-- clock the first byte out of the command memory FIFO. 
 			if (state = check_cmd_s) then
 				if CRCERR or (CME = '1') then 
 					next_state := idle_s;
@@ -1282,5 +1274,6 @@ begin
 		CKEN => false
 	);	
 	
-	TP <= to_std_logic(SCRQ);
+--	MSR <= to_std_logic(boot_i2c_data = "11110000");
+	TP <= to_std_logic(FCKEN);
 end behavior;

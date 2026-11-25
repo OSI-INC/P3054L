@@ -9,7 +9,7 @@ entity ring_oscillator is
 		num_feeds : integer := 8
 	);
 	port (
-		ENABLE : in std_logic;
+		ENABLE : in boolean;
 		mask   : std_logic_vector(num_feeds-1 downto 0);
 		CK     : out std_logic
 	);
@@ -19,7 +19,7 @@ architecture behavior of ring_oscillator is
 
 -- When compiling and routing this oscillator, we have to convince the VHDL 
 -- compiler to retain the ring buffers, despite its great desire to elimnate 
--- them all, and its complaints that we have timing loops. In a LCMXO2-1200ZE 
+-- them all, and its complaints that we have timing loops. In a LCMXO2-ZE 
 -- with core power supply dropped to 1.0 V, the gate delay is around 3.5 ns. 
 -- For each gate we add to the ring oscillator, we increase the period by 
 -- roughly 7.0 ns, which is ample resolution for the generation of a period 
@@ -34,7 +34,9 @@ architecture behavior of ring_oscillator is
 	attribute nomerge : string;
 
 -- Ring Oscillator and Transmit Clock
-	component BUFBA is port (A : in std_logic; Z : out std_logic); end component;
+	component BUFBA is 
+		port (A : in std_logic; Z : out std_logic); 
+	end component;
 	signal R : std_logic_vector(num_gates downto 0);
 	attribute syn_keep of R : signal is true;
 	attribute nomerge of R : signal is ""; 
@@ -52,12 +54,12 @@ begin
 
 -- When ENABLE, feed back the output of the final gate to the first gate.
 	R(0) <= to_std_logic(
-		(ENABLE = '1') 
-		and ((R(num_gates downto num_gates-num_feeds+1) and mask)
-			= (mask'range => '0'))
+		ENABLE and 
+			((R(num_gates downto num_gates-num_feeds+1) and mask)
+				= (mask'range => '0'))
 		);
 	
--- The clock output.
+-- The ring oscillator clock output, guaranteed 50% duty cycle.
 	CK <= R(0);
 end behavior;
 ------------ END RING OSCILLATOR DECLARATION -----------
