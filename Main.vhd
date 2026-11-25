@@ -30,7 +30,9 @@
 -- Manager. In making this improvement, we move the called processes
 -- onto the falling edge of FCK. They now reset themselves and turn 
 -- off FCK in one setp. Clean up code with subtypes and reduce all 
--- sensitivity lists to "all".
+-- sensitivity lists to "all". Add to Entities a prototype I2
+-- Master that consumes 44 LUTs when added to code. Acquisition and
+-- transmission tested and working.
 
 
 library ieee;  
@@ -67,7 +69,7 @@ entity main is
 	constant wildcard_id : device_id_type := x"FFFF";
 -- Configuration of the Ring Oscillator
 	constant fck_num_feeds : natural := 8;
-	constant fck_num_gates : natural := 24;
+	constant fck_num_gates : natural := 26;
 	subtype fck_mask_type is std_logic_vector(fck_num_feeds-1 downto 0);
 	constant default_fck_mask : fck_mask_type :=x"10";
 
