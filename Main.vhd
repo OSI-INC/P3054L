@@ -25,7 +25,12 @@
 -- Hard-code individual transmit periods and shifts. Update comments.
 
 -- V2.4 [23-NOV-26] Rename CMD_FIFO to CMDMEM. Disable transmission
--- while command incoming, allow while executing.
+-- while command incoming, allow while executing. Eliminate need to
+-- reset the acquisition and dispatch processes called by the Telemetry
+-- Manager. In making this improvement, we move the called processes
+-- onto the falling edge of FCK. They now reset themselves and turn 
+-- off FCK in one setp. Clean up code with subtypes and reduce all 
+-- sensitivity lists to "all".
 
 
 library ieee;  
@@ -298,32 +303,45 @@ begin
 		end if;	
 	end process;
 		
--- The Telemetry Manager cycles through thirty-two states at 1024 Hz.-- It runs of the rising edge of RCK. In states zero to seven, it
--- updates the sample memory as required by the telemetry protocol. The
--- manager will not aquire or update each sample memory location on each
--- cycle, but may instead wait for some number of cycles before updating.
--- Whenever the manager updates the sample memory, it does so by calling
--- upon an acquisition process that runs off the falling edge of FCK. The
--- manager and the acquisition process communicate through a toggle 
--- handshake consisting of two signals xRQ and xACK. The manager toggles
--- xRQ to start acquisition process x. When xRQ and xACK are not equal,
--- FCK will start running. The first thing that happens is FCK goes HI.
--- On the falling edge of FCK, process x notices that xRQ and xACK are
--- not equal and starts running. When process x is done, it toggles xACK
--- and returns to its idle state. Now that xACK and xRQ are equal, FCK
--- stops running. After the falling edge that toggles xACK, FCK remains
--- LO and process x stays in its idle state. The manager assumes that 
--- every acquisition process will complete within one RCK cycle, so it
--- does not bother to watch the acquisition busy flag.
+-- The Telemetry Manager cycles through thirty-two states at 1024 Hz.-- It runs of the rising edge of RCK. In states zero and one, it 
+-- does nothing, so as to make sure that the dispatch processes 
+-- initiated in the previous cycle have completed their work. In 
+-- states two to fifteen, it calls acquisition processes. In states
+-- sixteen to thirty-one the manager picks one of the sixteen states
+-- at random in which to call the Telemetry Dispatcher. The 
+-- dispatcher's operations may take up to three RCK cycles to 
+-- complete, so if the dispatcher is called in state thirty-one, 
+-- its operations may not complete until the manager is in state 
+-- one. This overlap into state one is why the manager does nothing 
+-- in states zero and one. 
 --
--- In states sixteen to forty-seven, the Telemetry Manager uses the four
+-- During the acquisition states two to fifteen, the Telemetry 
+-- Manager updates the sample memory as required by the telemetry 
+-- protocol. The manager will not aquire or update each sample memory 
+-- location on each cycle, but may instead wait for some number of 
+-- cycles before updating. Whenever the manager updates the sample 
+-- memory, it does so by setting some control signals and calling 
+-- an acquisition process that runs off the falling edge of FCK. The 
+-- manager and acquisition process x cooperate through the use of
+-- two signals xRQ and xACK. The manager toggles xRQ to start 
+-- process x. The xRQ and xACK will now be unequal, and this inequality
+-- starts FCK. The FCK signal will go HI. On the falling edge of FCK, 
+-- process x detects xRQ xor xACK and starts running. When process x 
+-- is done, it toggles xACK and returns to its idle state on the same
+-- falling edge of FCK. Now that xACK and xRQ are equal, FCK stops 
+-- running. It remains LO and process x stays in its idle state. When
+-- FCK starts running for another process, process x remains in its
+-- idle state. The manager assumes that every acquisition process 
+-- will complete within one RCK cycle, so it does not bother to watch 
+-- the acquisition busy flag.
+--
+-- In states sixteen to thirty-one, the Telemetry Manager uses the four
 -- transmit_shift bits to pick one of these sixteen states to start the
--- Telemetry Dispatcher. The dispatcher runs off the falling edge of FCK
--- and interacts with the manager in the same way as the acquisition
--- processes: with a request and acknowledge toggle handshake. 
---
--- In states forty-eight to sixty-three, the Telemetry Manager is doing 
--- nothing. The Telemetry Dispatcher has at least sixteen RCK periods to-- to transmit all its messages before the next set of acquisitions begins.
+-- Telemetry Dispatcher. These bits are randomized by the message 
+-- transmitter using the least significant bits of the ADC samples. The
+-- dispatcher runs off the falling edge of FCK and interacts with the 
+-- manager in the same way as do acquisition processes: with a request 
+-- and acknowledge toggle handshake. 
 	Telemetry_Manager : process (all) is
 		constant cycle_len : positive := 32;
 		variable state, next_state : natural range 0 to cycle_len-1;
@@ -332,11 +350,11 @@ begin
 			ENFCKTM <= false;
 			SCRQ <= false;
 			TDRQ <= false;
-			state := cycle_len-1;
+			state := 0;
 		elsif rising_edge(RCK) then
 			next_state := (state + 1) mod cycle_len;
 
-			if (state = 7) then
+			if (state = 2) then
 				SCRQ <= not SCRQ;
 			elsif (state = to_integer(unsigned(transmit_shift))+16) then
 				TDRQ <= not TDRQ;
