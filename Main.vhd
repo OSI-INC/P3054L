@@ -76,6 +76,7 @@ entity main is
 	constant fck_num_gates : natural := 26;
 	subtype fck_mask_type is std_logic_vector(fck_num_feeds-1 downto 0);
 	constant default_fck_mask : fck_mask_type :=x"10";
+	constant fck_i2c_div : natural := 5;
 
 -- Configuration and Calibration of Transmitter.
 	constant td_chan_default : natural := 1;
@@ -167,11 +168,21 @@ architecture behavior of main is
 		SI2CACK, -- Sensor I2C Acknowledge
 		SRRQ, -- Sensor Reader Request
 		SRACK, -- Sensor Reader Acknowledge
+		SRSHSD, -- Sensor Reader Shift Sample Data
 		SI2CEN, -- Sensor I2C Clock Enable
 		SI2CWR -- Sensor I2C Data Write
 		: boolean := false;
+	signal SRWRSM, -- Sample Reader Write to Sample Memory
+		SRBIT, -- Sample Reader Bit for Sample Data
+		SRADD -- Sample Reader Requests Addition
+		: std_logic;
 	signal sr_data, si2c_data : std_logic_vector(7 downto 0);
 	signal si2c_op : std_logic_vector(2 downto 0);
+	constant op_start   : std_logic_vector(2 downto 0) := "001";
+	constant op_stop    : std_logic_vector(2 downto 0) := "010";
+	constant op_read    : std_logic_vector(2 downto 0) := "100";
+	constant op_readend : std_logic_vector(2 downto 0) := "101";
+	constant op_write   : std_logic_vector(2 downto 0) := "110";	
 	
 -- Telemetry Dispatcher.
 	signal TDWRSM, -- Telemetry Dispatcher Write to Sample Memory
@@ -351,6 +362,7 @@ begin
 			ADCRQ <= false;
 			ADCCAL <= true;
 			TDRQ <= false;
+			SRRQ <= false;
 			MCK <= '0';
 			state := 0;
 			adc_shift <= 0;
@@ -410,7 +422,7 @@ begin
 	Sample_Memory : entity SMRAM port map (
 		Clock => not FCK,
 		ClockEn => '1',
- 		WE => ADCWRSM or TDWRSM,
+ 		WE => ADCWRSM or TDWRSM or SRWRSM,
 		Address => smem_addr, 
 		Data => acc_data,
 		Q => smem_data);
@@ -423,12 +435,14 @@ begin
 		if RESET = '1' then
 			sample_data <= (others => '0');
 		elsif falling_edge(FCK) then
-			if ADCSHSD then
+			if ADCSHSD or SRSHSD then
 				sample_data(17 downto 1) <= sample_data(16 downto 0);
-				sample_data(0) <= ADCBIT;
+				sample_data(0) <=
+					(ADCBIT and to_std_logic(ADCSHSD))
+					or (SRBIT and to_std_logic(SRSHSD));
 			end if;
 		end if;
-	end process;
+	end process;	
 
 -- The Sample Address Multiplexer chooses either the Telemetry-- Dispatcher address or the Telemetry Manager address for the
 -- Sample Memory. The Telemetry Dispatcher takes priority.
@@ -449,7 +463,7 @@ begin
 		DataB => smem_data,
 		Result => acc_data,
 		Clock => not FCK,
-		ClockEn => ADCADD,
+		ClockEn => ADCADD or SRADD,
 		Reset => TDRSTACC
 	);
 
@@ -637,10 +651,10 @@ begin
 			state := next_state;
 			
 			if (count=0) then
-				count := 5;
+				count := fck_i2c_div-1;
 				SI2CEN <= true;
 			else
-				count := count+1;
+				count := count-1;
 				SI2CEN <= false;
 			end if;
 		end if;
