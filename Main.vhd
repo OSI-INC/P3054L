@@ -158,7 +158,6 @@ architecture behavior of main is
 	signal ADCCAL, -- Calibrate the Selected ADC
 		ADCRD, -- Initiate ADC Read
 		ADCBSY, -- ADC Busy
-		ADCCS, -- ADC Chip Select
 		ADCSHSD -- ADC Reader Shifts Sample Data
 		: boolean := false;
 	signal ADCWRSM, -- ADC Reader Writes to Sample Memory
@@ -292,12 +291,13 @@ begin
 -- The Millisecond Clock takes RCK, which is 32.768 kHz and divides
 -- by 32 to get 1.024 kHz, which we use as our millisecond clock.
 	Millisecond_Clock : process (all) is
-		variable mcnt : natural range 0 to 31;
+		constant rck_per_ms : positive := 32;
+		variable mcnt : natural range 0 to rck_per_ms-1;
 	begin
 		if RESET = '1' then
 			mcnt := 0;
 		elsif falling_edge(RCK) then
-			mcnt := mcnt + 1;
+			mcnt := (mcnt + 1) mod rck_per_ms;
 			if (mcnt <= 15) then
 				MCK <= '0';
 			else
@@ -306,17 +306,16 @@ begin
 		end if;	
 	end process;
 		
--- The Telemetry Manager cycles through thirty-two states at 1024 Hz.-- It runs of the rising edge of RCK. In states zero and one, it 
--- does nothing, so as to make sure that the dispatch processes 
--- initiated in the previous cycle have completed their work. In 
--- states two to fifteen, it calls acquisition processes. In states
--- sixteen to thirty-one the manager picks one of the sixteen states
--- at random in which to call the Telemetry Dispatcher. The 
--- dispatcher's operations may take up to three RCK cycles to 
--- complete, so if the dispatcher is called in state thirty-one, 
--- its operations may not complete until the manager is in state 
--- one. This overlap into state one is why the manager does nothing 
--- in states zero and one. 
+-- The Telemetry Manager cycles through thirty-two states. It runs-- off the rising edge of RCK, and so completes its cycles at 
+-- 1024 Hz. In states zero and one, it does nothing, so as to make 
+-- sure that the dispatch processes initiated in the previous cycle 
+-- have completed their work. In states two to fifteen, it calls 
+-- acquisition processes. In states sixteen to thirty-one the 
+-- manager picks one of the sixteen states at random in which to 
+-- call the Telemetry Dispatcher. The dispatcher's operations may 
+-- take up to three RCK cycles to complete, so if the dispatcher is-- called in state thirty-one, its operations may not complete until 
+-- the manager is in state one. This overlap into state one is why 
+-- the manager does nothing in states zero and one. 
 --
 -- During the acquisition states two to fifteen, the Telemetry 
 -- Manager updates the sample memory as required by the telemetry 
@@ -340,11 +339,11 @@ begin
 --
 -- In states sixteen to thirty-one, the Telemetry Manager uses the four
 -- transmit_shift bits to pick one of these sixteen states to start the
--- Telemetry Dispatcher. These bits are randomized by the message 
--- transmitter using the least significant bits of the ADC samples. The
--- dispatcher runs off the falling edge of FCK and interacts with the 
--- manager in the same way as do acquisition processes: with a request 
--- and acknowledge toggle handshake. 
+-- Telemetry Dispatcher. These bits are randomized by the ADC Reader 
+-- acquisition process using the least significant bits of ADC samples.
+-- The dispatcher runs off the falling edge of FCK and interacts with 
+-- the manager in the same way as do acquisition processes: with a 
+-- request and acknowledge toggle handshake. 
 	Telemetry_Manager : process (all) is
 		constant cycle_len : positive := 32;
 		variable state, next_state : natural range 0 to cycle_len-1;
@@ -418,16 +417,9 @@ begin
 	);
 
 -- The ADC Controller organizes sampling of all four inputs X1-X4 using
--- the four converters ADC1-ADC4. It runs off FCK. It starts running when
--- it SCRST is unasserted and FCK is running. It will not return to its idle 
--- state until SCRST is asserted again. It indicates to the source of SCRST
--- that it has completed its sampling by toggling the SCACK signal. The 
--- controller obtains a sample from each ADC for which the skip flag is 
--- clear. It latches the state of the four skip flags when it is idle or else
--- the firmware will freeze occasionally on RESET. The controller sets tm_addr 
--- and adc_shift to match each ADC in turn. The controller does not perform
--- the sampling itself, but instead uses the ADC Reader to read out one of
--- the ADCs and initiate another conversion.
+-- the four converters ADC1-ADC4. It runs off the falling edge of FCK. 
+-- It starts when ADCRQ and ADCACK are not equal. It returns to its idle
+-- state and toggles ADCACK.
 	ADC_Controller : process (all) is
 		variable state, next_state : natural range 0 to 5 := 0;
 		variable adc_index : natural range 0 to 3 := 0;
@@ -521,15 +513,14 @@ begin
 					next_state := sc_idle;
 			end case;
 
-			SCBSY <= (state /= sc_idle);
+			SCBSY <= (state > sc_idle) and (state < sc_done);
 
 			state := next_state;
 		end if;
 	end process;
 
 -- The ADC Reader starts reading one of the 14-bit ADCs when it detects 
--- ADC Read (ADCRD). It waits until ADCRD is unasserted before returning
--- to its rest state. When the reader has acquired a 14-bit sample,
+-- ADC Read (ADCRD). When the reader has acquired a 14-bit sample,
 -- it updates the transmit time shift value using a linear shift 
 -- register that provides the transmit scatter random number needed by
 -- the Telemetry Manager. The reader shifts 14-bit sample to the left 
@@ -539,7 +530,7 @@ begin
 -- performs a calibration read of twenty-four bits, with no shifting, no 
 -- accumulation, and no storage. This calibration read will cause the 
 -- ADC to self-calibrate provided that the calibration access is the 
--- first one after power-up. The reader runs off FCK.
+-- first one after power-up. The reader runs off the falling edge of FCK.
 	ADC_Reader : process (all) is
 		variable state, next_state : natural range 0 to 63 := 0;
 		constant calib_end : natural := 50;
@@ -561,7 +552,6 @@ begin
 		if (RESET = '1') then
 			state := 0;
 			ADCBSY <= false;
-			ADCCS <= false;
 			ADCADD <= '0';
 			ADCWRSM <= '0';
 			ADCBIT <= '0';
@@ -653,27 +643,23 @@ begin
 			ADCWRSM <= to_std_logic((state = read_end) and (not ADCCAL));
 
 			-- ADC Chip Select and ADC Busy busy flags.
-			ADCCS <= (state > 0)
+			ADCBSY <= (state > 0)
 				and (state < calib_end)
 				and (ADCCAL or (state < read_end));
-			ADCBSY <= (state /= 0);
 
 			-- Assign new state value.
 			state := next_state;
 		end if;
 
-		-- Select the ADC using the top two bits of the sample address.
-		NADC1 <= to_std_logic(not (ADCCS and (tm_addr = x1_sel)));
-		NADC2 <= to_std_logic(not (ADCCS and (tm_addr = x2_sel)));
-		NADC3 <= to_std_logic(not (ADCCS and (tm_addr = x3_sel)));
-		NADC4 <= to_std_logic(not (ADCCS and (tm_addr = x4_sel)));
+		-- Select the ADC using the sample address.
+		NADC1 <= to_std_logic(not (ADCBSY and (tm_addr = x1_sel)));
+		NADC2 <= to_std_logic(not (ADCBSY and (tm_addr = x2_sel)));
+		NADC3 <= to_std_logic(not (ADCBSY and (tm_addr = x3_sel)));
+		NADC4 <= to_std_logic(not (ADCBSY and (tm_addr = x4_sel)));
 	end process;
 
--- The Telemetry Dispatcher runs off FCK and is reset by TDRST. It
--- arranges for transmission of four values stored in the sample memory.
--- It transmits four channels in sequence, ignoring the ADC disable-- flags. It ignores the individual transmit periods of the channels
--- as well. This dispatcher is a place holder for a more sophisticated
--- dispatcher coming later.
+-- The Telemetry Dispatcher runs off the falling edge of FCK. It
+-- arranges for transmission of values stored in the sample memory.
 	Telemetry_Dispatcher : process (all) is
 		variable state, next_state : natural range 0 to 5 := 0;
 		variable channel_index : natural range 0 to 3 := 0;
@@ -693,6 +679,7 @@ begin
 			TDRSTACC <= '0';
 			TDWRSM <= '0';
 			TDACK <= false;
+			TXI <= false;
 		elsif falling_edge(FCK) then
 			TDRSTACC <= '0';
 			TDWRSM <= '0';
@@ -757,7 +744,7 @@ begin
 				channel_index := channel_index + 1;
 			end if;
 			
-			TDBSY <= (state /= td_idle);
+			TDBSY <= (state > td_idle) and (state < td_done);
 
 			state := next_state;
 		end if;
@@ -798,7 +785,7 @@ begin
 		-- Upon startup, we make sure we are in the idle state.
 		if (RESET = '1') then 
 			state := 0;
-			
+			TXA <= false;
 		elsif rising_edge(TCK) then
 			-- The process starts when we assert TXI. We move through all 
 			-- subsequent states until we reach the final state, where we 
@@ -1281,5 +1268,5 @@ begin
 
 	SDA <= '1';
 	SCL <= '1';
-	TP <= to_std_logic(ADCCS);
+	TP <= to_std_logic(ADCBSY);
 end behavior;
