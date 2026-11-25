@@ -24,7 +24,7 @@
 -- to set fck_mask. Work on routing priorities and no-merge directives.
 -- Hard-code individual transmit periods and shifts. Update comments.
 
--- V2.4 [23-NOV-26] Rename CMD_FIFO to CMDMEM. Disable transmission
+-- V2.4 [24-NOV-26] Rename CMD_FIFO to CMDMEM. Disable transmission
 -- while command incoming, allow while executing. Eliminate need to
 -- reset the acquisition and dispatch processes called by the Telemetry
 -- Manager. In making this improvement, we move the called processes
@@ -33,6 +33,10 @@
 -- sensitivity lists to "all". Add to Entities a prototype I2
 -- Master that consumes 44 LUTs when added to code. Acquisition and
 -- transmission tested and working.
+
+-- V2.5 [25-NOV-26] Individual transmit periods and shifts for X1
+-- to X4 working. A new I2C Master process in the entities library.
+-- Sweep response correct.
 
 
 library ieee;  
@@ -89,14 +93,14 @@ entity main is
 	constant x2_addr : smem_addr_type := "0001";
 	constant x3_addr : smem_addr_type := "0010";
 	constant x4_addr : smem_addr_type := "0011";
-	constant x1_pd : natural := 4;
-	constant x2_pd : natural := 4;
+	constant x1_pd : natural := 1;
+	constant x2_pd : natural := 2;
 	constant x3_pd : natural := 4;
-	constant x4_pd : natural := 4;
-	constant x1_shift : natural := 2;
-	constant x2_shift : natural := 2;
+	constant x4_pd : natural := 8;
+	constant x1_shift : natural := 4;
+	constant x2_shift : natural := 3;
 	constant x3_shift : natural := 2;
-	constant x4_shift : natural := 2;
+	constant x4_shift : natural := 1;
 	constant x1_channel : natural := 1;
 	constant x2_channel : natural := 3;
 	constant x3_channel : natural := 5;
@@ -209,7 +213,7 @@ architecture behavior of main is
 	signal target_id_hi : std_logic_vector(7 downto 0);
 	
 -- I2C Masters
-	signal boot_i2c_data : std_logic_vector(7 downto 0);
+	signal tm_i2c_data : std_logic_vector(7 downto 0);
 	
 -- Functions and Procedures	
 	function to_std_logic (v: boolean) return std_ulogic is
