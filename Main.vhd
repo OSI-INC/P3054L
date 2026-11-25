@@ -610,53 +610,205 @@ begin
 	);	
 	
 -- The Sensor Reader uses the Sensor I2C to read the accelerometer
--- and thermometer. It runs off the falling edge of FCK. 
+-- and thermometer. It runs off the falling edge of FCK.
 	Sensor_Reader : process (all) is
-	variable state, next_state : natural range 0 to 15;
-	constant sr_idle : natural := 0;
-	constant sr_wait : natural := 7;
-	constant sr_done : natural := 15;
-	variable count : natural range 0 to 5;
+		variable state, next_state : natural range 0 to 31;
+		variable return_state : natural range 0 to 31;
+		variable count : natural range 0 to 4;
+		variable bit_idx : natural range 0 to 7;
+
+		constant sr_idle  : natural := 0;
+		constant sr_start : natural := 1;
+		constant sr_devw  : natural := 2;
+		constant sr_reg   : natural := 3;
+		constant sr_rstart : natural := 4;
+		constant sr_devr  : natural := 5;
+		constant sr_readhi : natural := 6;
+		constant sr_zeros : natural := 7;
+		constant sr_shhi  : natural := 8;
+		constant sr_readlo : natural := 9;
+		constant sr_shlo  : natural := 10;
+		constant sr_stop  : natural := 11;
+		constant sr_add   : natural := 12;
+		constant sr_write : natural := 13;
+		constant sr_done  : natural := 14;
+		constant sr_req   : natural := 15;
+		constant sr_wait  : natural := 16;
+
 	begin
 		if RESET = '1' then
+			state := sr_idle;
+			return_state := sr_idle;
+			count := 0;
+			bit_idx := 0;
 			SI2CEN <= false;
 			SI2CRQ <= false;
 			SI2CWR <= false;
 			SRACK <= false;
+			SRSHSD <= false;
+			SRBIT <= '0';
+			SRADD <= '0';
+			SRWRSM <= '0';
+			si2c_op <= op_stop;
+			si2c_data <= (others => '0');
+
 		elsif falling_edge(FCK) then
+
+			-- Default values for single-clock strobes.
+			SI2CWR <= false;
+			SRSHSD <= false;
+			SRADD <= '0';
+			SRWRSM <= '0';
+
 			if (SRRQ xor SRACK) then
-				--
-				-- Code here to read temperature sensor.
-				--
+
+				next_state := state;
+
 				case state is
+
 					when sr_idle =>
-						SI2CRQ <= not SI2CRQ;
-						next_state := sr_wait;
-					when sr_wait =>
-						if (SI2CRQ xor SI2CACK) then
-							next_state := sr_wait;
-						else 
-							next_state := sr_done;
+						next_state := sr_start;
+
+					-- Generate the start condition.
+					when sr_start =>
+						si2c_op <= op_start;
+						return_state := sr_devw;
+						next_state := sr_req;
+
+					-- Select the temperature sensor for writing.
+					when sr_devw =>
+						si2c_op <= op_write;
+						si2c_data <= x"92";
+						SI2CWR <= true;
+						return_state := sr_reg;
+						next_state := sr_req;
+
+					-- Select the temperature result register.
+					when sr_reg =>
+						si2c_op <= op_write;
+						si2c_data <= x"00";
+						SI2CWR <= true;
+						return_state := sr_rstart;
+						next_state := sr_req;
+
+					-- Generate a repeated start condition.
+					when sr_rstart =>
+						si2c_op <= op_start;
+						return_state := sr_devr;
+						next_state := sr_req;
+
+					-- Select the temperature sensor for reading.
+					when sr_devr =>
+						si2c_op <= op_write;
+						si2c_data <= x"93";
+						SI2CWR <= true;
+						return_state := sr_readhi;
+						next_state := sr_req;
+
+					-- Read the high byte and acknowledge.
+					when sr_readhi =>
+						si2c_op <= op_read;
+						return_state := sr_zeros;
+						bit_idx := 3;
+						next_state := sr_req;
+
+					-- Shift four leading zeros into sample_data.
+					when sr_zeros =>
+						SRBIT <= '0';
+						SRSHSD <= true;
+						if (bit_idx = 0) then
+							bit_idx := 7;
+							next_state := sr_shhi;
+						else
+							bit_idx := bit_idx - 1;
 						end if;
+
+					-- Shift the high byte into sample_data,
+					-- inverting the sign bit.
+					when sr_shhi =>
+						SRBIT <= sr_data(bit_idx);
+						if (bit_idx = 7) then
+							SRBIT <= not sr_data(7);
+						end if;
+						SRSHSD <= true;
+						if (bit_idx = 0) then
+							next_state := sr_readlo;
+						else
+							bit_idx := bit_idx - 1;
+						end if;
+
+					-- Read the low byte without acknowledging.
+					when sr_readlo =>
+						si2c_op <= op_readend;
+						return_state := sr_shlo;
+						bit_idx := 7;
+						next_state := sr_req;
+
+					-- Shift the six most significant bits of
+					-- the low byte into sample_data.
+					when sr_shlo =>
+						SRBIT <= sr_data(bit_idx);
+						SRSHSD <= true;
+						if (bit_idx = 2) then
+							next_state := sr_stop;
+						else
+							bit_idx := bit_idx - 1;
+						end if;
+
+					-- Generate the stop condition.
+					when sr_stop =>
+						si2c_op <= op_stop;
+						return_state := sr_add;
+						next_state := sr_req;
+
+					-- Accumulate the new sample.
+					when sr_add =>
+						SRADD <= '1';
+						next_state := sr_write;
+
+					-- Write the accumulator result to memory.
+					when sr_write =>
+						SRWRSM <= '1';
+						next_state := sr_done;
+
+					-- The memory write takes place on this edge.
 					when sr_done =>
 						SRACK <= SRRQ;
 						next_state := sr_idle;
+
+					-- Initiate an I2C operation. Any outgoing
+					-- byte is loaded into the I2C master on
+					-- this edge, before the request takes effect.
+					when sr_req =>
+						SI2CRQ <= not SI2CRQ;
+						next_state := sr_wait;
+
+					-- Wait for completion of the I2C operation.
+					when sr_wait =>
+						if (SI2CRQ = SI2CACK) then
+							next_state := return_state;
+						end if;
+
 					when others =>
 						next_state := sr_idle;
+
 				end case;
+
 			else
 				next_state := sr_idle;
 			end if;
-			
+
 			state := next_state;
-			
-			if (count=0) then
-				count := fck_i2c_div-1;
+
+			-- Enable the I2C master once every five FCK periods.
+			if (count = 0) then
+				count := 4;
 				SI2CEN <= true;
 			else
-				count := count-1;
+				count := count - 1;
 				SI2CEN <= false;
 			end if;
+
 		end if;
 	end process;
 
