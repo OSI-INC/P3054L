@@ -78,7 +78,7 @@ entity main is
 	constant default_fck_mask : fck_mask_type :=x"10";
 
 -- Configuration and Calibration of Transmitter.
-	constant td_channel_default : natural := 1;
+	constant td_chan_default : natural := 1;
 	constant frequency_step : positive := 1; 
 	constant frequency_low : natural := 6;
 	
@@ -93,18 +93,21 @@ entity main is
 	constant x2_addr : smem_addr_type := "0001";
 	constant x3_addr : smem_addr_type := "0010";
 	constant x4_addr : smem_addr_type := "0011";
+	constant tp_addr : smem_addr_type := "0100";
 	constant x1_pd : natural := 1;
 	constant x2_pd : natural := 2;
 	constant x3_pd : natural := 4;
 	constant x4_pd : natural := 8;
+	constant tp_pd : natural := 16;
 	constant x1_shift : natural := 4;
 	constant x2_shift : natural := 3;
 	constant x3_shift : natural := 2;
 	constant x4_shift : natural := 1;
-	constant x1_channel : natural := 1;
-	constant x2_channel : natural := 3;
-	constant x3_channel : natural := 5;
-	constant x4_channel : natural := 7;	
+	constant x1_chan : natural := 1;
+	constant x2_chan : natural := 3;
+	constant x3_chan : natural := 5;
+	constant x4_chan : natural := 7;	
+	constant tp_chan : natural := 9;
 end;
 
 architecture behavior of main is
@@ -147,7 +150,7 @@ architecture behavior of main is
 	signal tm_addr : smem_addr_type; -- Manager Sample Select
 	signal adc_shift : natural range 0 to 4; -- ADC sample left shift.
 		
--- ADC Controller and ADC Reader
+-- ADC Reader
 	signal ADCCAL, -- Calibrate the Selected ADC
 		ADCCS, -- ADC Chip Select
 		ADCRQ, -- Request ADC Read
@@ -158,6 +161,17 @@ architecture behavior of main is
 		ADCBIT, -- ADC Bit for Sample Data
 		ADCADD -- ADC Reader Requests Addition
 		: std_logic;
+		
+-- Sensor Reader
+	signal SI2CRQ, -- Sensor I2C Request
+		SI2CACK, -- Sensor I2C Acknowledge
+		SRRQ, -- Sensor Reader Request
+		SRACK, -- Sensor Reader Acknowledge
+		SI2CEN, -- Sensor I2C Clock Enable
+		SI2CWR -- Sensor I2C Data Write
+		: boolean := false;
+	signal sr_data, si2c_data : std_logic_vector(7 downto 0);
+	signal si2c_op : std_logic_vector(2 downto 0);
 	
 -- Telemetry Dispatcher.
 	signal TDWRSM, -- Telemetry Dispatcher Write to Sample Memory
@@ -171,7 +185,8 @@ architecture behavior of main is
 	subtype transmit_shift_type is std_logic_vector(3 downto 0);
 	signal transmit_shift : transmit_shift_Type;
 
--- Message Transmission. The syn_keep and nomerge reduce code size slightly.
+-- Message Transmission. The syn_keep and nomerge reduce code size 
+-- slightly.
 	signal TXI, -- Transmit Initiate
 		TXWP, -- Transmit Warmup
 		TXA, -- Transmit Active
@@ -180,8 +195,8 @@ architecture behavior of main is
 		: boolean := false;
 	attribute syn_keep of TXI, TXA : signal is true;
 	attribute nomerge of TXI, TXA : signal is "";  
-	constant max_channel_num : positive := 255;
-	signal td_channel : natural range 0 to max_channel_num;
+	constant max_chan_num : positive := 255;
+	signal td_chan : natural range 0 to max_chan_num;
 		
 -- Byte Receiver
 	signal RPS, -- Radio Frequency Power Synchronized
@@ -265,7 +280,7 @@ begin
 -- calibrated so that it produces FCK of 10 MHz. The Fast Clock is
 -- enabled whenever the request and acknowledgment signals of one of
 -- our acquisition or dispatch processes are not equal.
-	FCKEN <= (ADCRQ xor ADCACK) or (TDRQ xor TDACK);
+	FCKEN <= (ADCRQ xor ADCACK) or (TDRQ xor TDACK) or (SRRQ xor SRACK);
 	Fast_Clock : entity ring_oscillator 
 		generic map (
 			num_gates => fck_num_gates,
@@ -369,6 +384,8 @@ begin
 						ADCRQ <= not ADCRQ;
 					end if;
 				elsif (state = 6) then
+					tm_addr <= tp_addr;
+					SRRQ <= not SRRQ;
 					ADCCAL <= false;
 				elsif (state = to_integer(unsigned(transmit_shift))+16) then
 					TDRQ <= not TDRQ;
@@ -562,6 +579,73 @@ begin
 		NADC4 <= to_std_logic(not (ADCCS and (tm_addr = x4_addr)));
 	end process;
 
+-- The Sensor I2C is the I2C bus master we use to read the thermometer
+-- and accelerometer.
+	Sensor_I2C : entity i2c_master port map (
+		RESET => RESET,
+		opcode => si2c_op,
+		I2CRQ => SI2CRQ,
+		I2CACK => SI2CACK,
+		data_out => sr_data,
+		data_in => si2c_data,
+		DATAWR => SI2CWR,
+		SCL => SCL,
+		SDA => SDA,
+		CK => FCK,
+		CKEN => SI2CEN
+	);	
+	
+-- The Sensor Reader uses the Sensor I2C to read the accelerometer
+-- and thermometer. It runs off the falling edge of FCK. 
+	Sensor_Reader : process (all) is
+	variable state, next_state : natural range 0 to 15;
+	constant sr_idle : natural := 0;
+	constant sr_wait : natural := 7;
+	constant sr_done : natural := 15;
+	variable count : natural range 0 to 5;
+	begin
+		if RESET = '1' then
+			SI2CEN <= false;
+			SI2CRQ <= false;
+			SI2CWR <= false;
+			SRACK <= false;
+		elsif falling_edge(FCK) then
+			if (SRRQ xor SRACK) then
+				--
+				-- Code here to read temperature sensor.
+				--
+				case state is
+					when sr_idle =>
+						SI2CRQ <= not SI2CRQ;
+						next_state := sr_wait;
+					when sr_wait =>
+						if (SI2CRQ xor SI2CACK) then
+							next_state := sr_wait;
+						else 
+							next_state := sr_done;
+						end if;
+					when sr_done =>
+						SRACK <= SRRQ;
+						next_state := sr_idle;
+					when others =>
+						next_state := sr_idle;
+				end case;
+			else
+				next_state := sr_idle;
+			end if;
+			
+			state := next_state;
+			
+			if (count=0) then
+				count := 5;
+				SI2CEN <= true;
+			else
+				count := count+1;
+				SI2CEN <= false;
+			end if;
+		end if;
+	end process;
+
 -- The Telemetry Dispatcher runs off the falling edge of FCK. It
 -- arranges for transmission of values stored in the sample memory.
 	Telemetry_Dispatcher : process (all) is
@@ -579,8 +663,12 @@ begin
 		constant td_tx4  : natural := 10;
 		constant td_wx4  : natural := 11;
 		constant td_cx4  : natural := 12;
-		constant td_done : natural := 13;
-		variable x1_idx, x2_idx, x3_idx, x4_idx : natural range 0 to 16;
+		constant td_ttp  : natural := 13;
+		constant td_wtp  : natural := 14;
+		constant td_ctp  : natural := 15;
+		constant td_done : natural := 16;
+		variable x1_idx, x2_idx, x3_idx, x4_idx, tp_idx 
+			: natural range 0 to 16;
 		
 	begin
 		if RESET = '1' then
@@ -589,7 +677,8 @@ begin
 			x2_idx := 0;
 			x3_idx := 0;
 			x4_idx := 0;
-			td_channel <= 0;
+			tp_idx := 0;
+			td_chan <= 0;
 			TDBSY <= false;
 			TDRSTACC <= '0';
 			TDWRSM <= '0';
@@ -607,7 +696,7 @@ begin
 						
 					-- Transmit the X1 sample.
 					when td_tx1 =>
-						td_channel <= x1_channel;
+						td_chan <= x1_chan;
 						td_addr <= x1_addr;
 						if (x1_pd = 0) then
 							next_state := td_tx2;
@@ -636,7 +725,7 @@ begin
 
 					-- Transmit the X2 sample.
 					when td_tx2 =>
-						td_channel <= x2_channel;
+						td_chan <= x2_chan;
 						td_addr <= x2_addr;
 						if (x2_pd = 0) then
 							next_state := td_tx3;
@@ -665,7 +754,7 @@ begin
 
 					-- Transmit the X3 sample.
 					when td_tx3 =>
-						td_channel <= x3_channel;
+						td_chan <= x3_chan;
 						td_addr <= x3_addr;
 						if (x3_pd = 0) then
 							next_state := td_tx4;
@@ -694,10 +783,10 @@ begin
 
 					-- Transmit the X4 sample.
 					when td_tx4 =>
-						td_channel <= x4_channel;
+						td_chan <= x4_chan;
 						td_addr <= x4_addr;
 						if (x4_pd = 0) then
-							next_state := td_done;
+							next_state := td_ttp;
 						elsif (x4_idx = 0) then
 							TXI <= true;
 							if TXA then
@@ -707,7 +796,7 @@ begin
 							end if;
 						else
 							x4_idx := x4_idx-1;
-							next_state := td_done;
+							next_state := td_ttp;
 						end if;
 					when td_wx4 =>
 						if TXA then
@@ -719,6 +808,35 @@ begin
 						TDRSTACC <= '1';
 						TDWRSM <= '1';
 						x4_idx := x4_pd-1;
+						next_state := td_ttp;
+
+					-- Transmit the temperature.
+					when td_ttp =>
+						td_chan <= tp_chan;
+						td_addr <= tp_addr;
+						if (tp_pd = 0) then
+							next_state := td_done;
+						elsif (tp_idx = 0) then
+							TXI <= true;
+							if TXA then
+								next_state := td_wtp;
+							else
+								next_state := td_ttp;
+							end if;
+						else
+							tp_idx := tp_idx-1;
+							next_state := td_done;
+						end if;
+					when td_wtp =>
+						if TXA then
+							next_state := td_wtp;
+						else
+							next_state := td_ctp;
+						end if;
+					when td_ctp =>
+						TDRSTACC <= '1';
+						TDWRSM <= '1';
+						tp_idx := tp_pd-1;
 						next_state := td_done;
 						
 					when td_done => 
@@ -742,7 +860,7 @@ begin
 -- radio-frequency oscillator, reading sixteen bits from one of the sensors and
 -- transmitting the bits. The process runs off TCK, which is FCK divided by two,-- so FCK must be running.
 	Message_Transmitter : process (all) is
-		variable channel_num, set_num, completion_code : 
+		variable chan_num, set_num, completion_code : 
 			natural range 0 to 15; -- set number for data
 		constant num_sync_bits : natural := 11; -- Num synchronizing bits at start.
 		constant num_id_bits : natural := 4; -- Number of ID bits.
@@ -759,16 +877,16 @@ begin
 		constant first_cc_bit : natural := first_data_bit + num_data_bits;
 		constant mt_done : natural := -- Final state of sample transmit machine.
 			num_xmit_bits + num_stop_bits; 
-		variable channel_bits : nibble_type;
+		variable chan_bits : nibble_type;
 		variable cc_bits : nibble_type;
 		variable state, next_state : natural range 0 to 63; -- Stample Transmit State
 	begin
 		-- The channel number, set number, and completion code are a function of the 
 		-- device id and the channel offset, which we calculate here.
-		channel_num := td_channel mod 16;
-		set_num := td_channel / 16;
-		completion_code := (15 - channel_num + set_num) mod 16;
-		channel_bits := nibble_type(to_unsigned(channel_num,4));
+		chan_num := td_chan mod 16;
+		set_num := td_chan / 16;
+		completion_code := (15 - chan_num + set_num) mod 16;
+		chan_bits := nibble_type(to_unsigned(chan_num,4));
 		cc_bits := nibble_type(to_unsigned(completion_code,4));		
 		-- Upon startup, we make sure we are in the idle state.
 		if (RESET = '1') then 
@@ -799,10 +917,10 @@ begin
 		
 			-- The data bit is the outgoing bit value for transmission of the sensor signal.
 			TXB <= ((state >= 0) and (state < first_start_bit))
-				or ((state = first_id_bit + 0) and (channel_bits(3) = '1'))
-				or ((state = first_id_bit + 1) and (channel_bits(2) = '1'))
-				or ((state = first_id_bit + 2) and (channel_bits(1) = '1'))
-				or ((state = first_id_bit + 3) and (channel_bits(0) = '1'))
+				or ((state = first_id_bit + 0) and (chan_bits(3) = '1'))
+				or ((state = first_id_bit + 1) and (chan_bits(2) = '1'))
+				or ((state = first_id_bit + 2) and (chan_bits(1) = '1'))
+				or ((state = first_id_bit + 3) and (chan_bits(0) = '1'))
 				or ((state = first_data_bit) and (smem_data(17) = '1'))
 				or ((state = first_data_bit + 1) and (smem_data(16) = '1'))
 				or ((state = first_data_bit + 2) and (smem_data(15) = '1'))
@@ -1254,5 +1372,5 @@ begin
 		CPA <= (state /= idle_s);
 	end process;
 	
-	TP <= to_std_logic(FCKEN);
+	TP <= to_std_logic(SI2CACK);
 end behavior;
