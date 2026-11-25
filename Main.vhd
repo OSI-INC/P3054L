@@ -218,6 +218,9 @@ architecture behavior of main is
 		: boolean := false;
 	signal target_id_hi : std_logic_vector(7 downto 0);
 	
+-- I2C Masters
+	signal boot_i2c_data : std_logic_vector(7 downto 0);
+	
 -- Functions and Procedures	
 	function to_std_logic (v: boolean) return std_ulogic is
 	begin if v then return('1'); else return('0'); end if; end function;
@@ -1265,8 +1268,19 @@ begin
 		CPRCV <= (state > idle_s) and (state < check_cmd_s);
 		CPA <= (state /= idle_s);
 	end process;
-
-	SDA <= '1';
-	SCL <= '1';
-	TP <= to_std_logic(ADCBSY);
+	
+	Boot_I2C : entity i2c_master port map (
+		RESET => RESET,
+		opcode => transmit_shift(2 downto 0),
+		I2CRQ => SCRQ,
+		data_out => boot_i2c_data,
+		data_in => smem_data(7 downto 0),
+		DATAWR => ADCRD,
+		SCL => SCL,
+		SDA => SDA,
+		CK => FCK,
+		CKEN => false
+	);	
+	
+	TP <= to_std_logic(SCRQ);
 end behavior;

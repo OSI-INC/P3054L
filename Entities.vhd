@@ -10,8 +10,8 @@ entity ring_oscillator is
 	);
 	port (
 		ENABLE : in std_logic;
-		mask : std_logic_vector(num_feeds-1 downto 0);
-		CK : out std_logic
+		mask   : std_logic_vector(num_feeds-1 downto 0);
+		CK     : out std_logic
 	);
 end;
 
@@ -76,10 +76,10 @@ use MACHXO2.components.all;
 
 entity PCU is
     port (
-        USERSTDBY: in  std_logic; 
-        CLRFLAG: in  std_logic; 
-        STDBY: out  std_logic; 
-        SFLAG: out  std_logic);
+        USERSTDBY : in  std_logic; 
+        CLRFLAG   : in  std_logic; 
+        STDBY     : out  std_logic; 
+        SFLAG     : out  std_logic);
 end PCU;
 
 architecture Structure of PCU is
@@ -118,3 +118,183 @@ begin
 
 end Structure;
 ----------- END POWER CONTROL UNIT ENTITY DECLARATION ------
+
+---------- I2C MASTER ENTITY DECLARATION ----------
+library ieee;  
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+entity i2c_master is
+	generic (
+		op_nop     : std_logic_vector(2 downto 0) := "000";
+		op_start   : std_logic_vector(2 downto 0) := "001";
+		op_stop    : std_logic_vector(2 downto 0) := "010";
+		op_read    : std_logic_vector(2 downto 0) := "100";
+		op_readend : std_logic_vector(2 downto 0) := "101";
+		op_write   : std_logic_vector(2 downto 0) := "110"
+	);
+	port (
+		RESET    : in std_logic;
+		opcode   : in std_logic_vector(2 downto 0);
+		I2CRQ    : in boolean;
+		I2CACK   : out boolean;
+		data_in  : in std_logic_vector(7 downto 0);
+		data_out : out std_logic_vector(7 downto 0);
+		DATAWR   : in boolean;
+		SCL      : out std_logic;
+		SDA      : inout std_logic;
+		CK       : in std_logic;
+		CKEN     : in boolean
+	);
+end entity;
+
+architecture behavior of i2c_master is
+	signal byte_data : std_logic_vector(7 downto 0);
+	signal SCLL, SDAL : boolean;
+begin
+
+	SCL <= '0' when SCLL else '1';
+	SDA <= '0' when SDAL else 'Z';
+	data_out <= byte_data;
+
+	Controller : process (all) is
+		variable state, next_state : integer range 0 to 31 := 0;
+	begin
+		if (RESET = '1') then
+			state := 0;
+			I2CACK <= false;
+			SCLL <= false;
+			SDAL <= false;
+			byte_data <= (others => '0');
+		elsif falling_edge(CK) then
+		
+			-- Parallel loading independent of CKEN. The caller must
+			-- load the outgoing byte before we execute state zero of
+			-- a write operation, and must not assert DATAWR during
+			-- an active byte transfer.
+			if DATAWR then
+				byte_data <= data_in;
+			end if;
+
+			-- Execute one operation per request. We will toggle I2CACK
+			-- and return to state zero when we are done servicing the 
+			-- request, so we will remain in state zero until the I2C
+			-- caller toggles I2CRQ.
+			if CKEN and (I2CRQ /= I2CACK) then
+
+				next_state := state + 1;
+				
+				-- The start and stop operations are short four-state
+				-- sequences that punctuate I2C exchanges. The start
+				-- sequence also supports a repeated start.
+				if (opcode = op_start) or (opcode = op_stop) then
+					case state is
+						when 0 =>
+							SDAL <= (opcode = op_stop);
+							if (opcode = op_stop) then
+								SCLL <= true;
+							end if;
+						when 1 =>
+							SCLL <= false;
+						when 2 =>
+							SDAL <= (opcode = op_start);
+						when others =>
+							if (opcode = op_start) then
+								SCLL <= true;
+							end if;
+							next_state := 0;
+							I2CACK <= I2CRQ;
+					end case;
+				
+				-- The byte operations, handled together.
+				elsif (opcode = op_write)
+					or (opcode = op_read)
+					or (opcode = op_readend) then
+
+					-- On all byte accesses, we shift the pin value of SDA
+					-- into the bottom of our data register, while shifting
+					-- the outgoing bits towards the top. We shift in states
+					-- 2, 4, 6, 8, 10, 12, 14, and 16. The expression below
+					-- saves three LUTs compared to the equivalent expression
+					-- (state < 17) and (state > 0) and (state mod 2 = 0).
+					if ((state < 16) and (state /= 0)
+						and (state mod 2 = 0)) or (state = 16) then
+						if not DATAWR then
+							byte_data <= byte_data(6 downto 0) & to_X01(SDA);
+						end if;
+					end if;
+
+					-- Eight data bits, two states per bit. On even states
+					-- we drive SCL low and prepare the outgoing data bit.
+					-- On odd states we release SCL and leave SDA unchanged.
+					-- During read access we release SDA for all eight bits.
+					if (state = 0) then
+					
+						-- We begin all these cycles by driving SCL low.
+						SCLL <= true;
+						
+						-- On writes, the first data bit is the top bit of
+						-- our data byte. The next state will be state one,
+						-- and our SDAL will persist in that state.
+						SDAL <= (opcode = op_write) and (byte_data(7) = '0');
+					
+					elsif (state < 16) then
+
+						-- Drive SCL low on even states.
+						if (state mod 2 = 0) then
+							SCLL <= true;
+						else
+							SCLL <= false;
+						end if;
+
+						-- Prepare next bit for output on write access. We 
+						-- still have, on the even-numbered states, the 
+						-- previous bit in the top of the data byte register.
+						-- And we are about to shift the register to the left.
+						-- What we want to do at the same time is apply the
+						-- new top bit to SDA. The bit we want to apply is 
+						-- currently the bit to the right of the top bit, so
+						-- we will take that one for SDA.
+						if (state mod 2 = 0) then
+							SDAL <= (opcode = op_write)
+								and (byte_data(6) = '0');
+						end if;
+
+					elsif (state = 16) then
+
+						-- Sample the eighth data bit and
+						-- prepare the acknowledge bit.
+						SCLL <= true;
+						SDAL <= (opcode = op_read);
+
+					elsif (state = 17) then
+
+						-- Ninth clock pulse.
+						SCLL <= false;
+
+					else
+
+						-- End of acknowledge pulse. Hold SCL low 
+						-- between operations.
+						SCLL <= true;
+						SDAL <= false;
+						next_state := 0;
+						I2CACK <= I2CRQ;
+
+					end if;
+
+				else
+
+					-- NOP or unrecognized opcode.
+					next_state := 0;
+					I2CACK <= I2CRQ;
+
+				end if;
+				
+				state := next_state;
+			end if;
+		end if;
+	end process;
+
+end architecture;
+----------- END I2C MASTER ENTITY DECLARATION ------
