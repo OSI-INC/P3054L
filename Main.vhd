@@ -38,6 +38,11 @@
 -- to X4 working. A new I2C Master process in the entities library.
 -- Sweep response correct.
 
+-- V2.6 [26-NOV-26] Add Sensor Reader that uses I2C Master to read
+-- out thermometer, readout and transmission working. Code size jumps
+-- from 378 to 495 LUTs. Decide to abandon LUT-based I2C Master and
+-- Sensor Reader and instead try using the RCM5.
+
 
 library ieee;  
 use ieee.std_logic_1164.all;
