@@ -170,21 +170,64 @@ architecture behavior of main is
 		ADCADD -- ADC Reader Requests Addition
 		: std_logic;
 
--- Microcontroller
+-- Configuration of RMC5 Microcontroller.
 	constant addr_len : positive := 9;
 	constant stack_len : positive := 4;
 	constant opcode_len : positive := 5;
 	constant instr_len : positive := addr_len + opcode_len;
+
+-- Memory Map Constants, sizes and base addresses.
+	constant mmu_const_bot : natural := 16#0000#;
+	constant mmu_const_top : natural := 16#00FF#;
+	constant mmu_ram_bot   : natural := 16#0100#;
+	constant mmu_ram_top   : natural := 16#01FF#;
+	constant mmu_ctrl_bot  : natural := 16#0200#;
+	constant mmu_ctrl_top  : natural := 16#02FF#;
+	constant mmu_cmd_bot   : natural := 16#0300#;
+	constant mmu_cmd_top   : natural := 16#03FF#;
+	
+-- Register Locations. We specify the offset from the start of the control
+-- space. When a location is a control register shadowed in RAM, we say it 
+-- is "Write/Readback". When writing to a location stores a value, we say
+-- "Write". When a location can be read but not written, we say it is 
+-- "Read". When writing or reading initiates a process we say "Strobe". 
+	constant mmu_irqb  : integer := 16#00#; -- Interrupt Request Bits (Read)
+	constant mmu_irst  : integer := 16#02#; -- Interrupt Reset Bits (Write)
+	constant mmu_acfg  : integer := 16#03#; -- Amplifier Configuration (Write)
+	constant mmu_led   : integer := 16#04#; -- Lamp Switch (Write)
+	constant mmu_rst   : integer := 16#05#; -- Software Reset (Write)
+	constant mmu_xhb   : integer := 16#06#; -- Transmit HI Byte (Write)
+	constant mmu_xlb   : integer := 16#07#; -- Transmit LO Byte (Write)
+	constant mmu_xch   : integer := 16#08#; -- Transmit Channel Number (Write/Strobe)
+	constant mmu_rfc   : integer := 16#09#; -- Radio Frequency Calibration (Write)	
+	constant mmu_dfr   : integer := 16#0A#; -- Diagnostic Flags (Write)
+	constant mmu_sr    : integer := 16#0B#; -- Status Register (Read)
+	constant mmu_cmp   : integer := 16#0C#; -- Command Memory Portal (Read/Write/Strobe)
+	constant mmu_fck   : integer := 16#0D#; -- Fast Clock Mask (Write)
+	constant mmu_i2c00 : integer := 16#0E#; -- i2c SDA=0 SCL=0 (Write)
+	constant mmu_i2c01 : integer := 16#0F#; -- i2c SDA=0 SCL=1 (Write)
+	constant mmu_i2cA0 : integer := 16#10#; -- i2c SDA=A SCL=0 (Write)
+	constant mmu_i2cA1 : integer := 16#11#; -- i2c SDA=A SCL=1 (Write)
+	constant mmu_i2cZ0 : integer := 16#12#; -- i2c SDA=Z SCL=0 (Write)
+	constant mmu_i2cZ1 : integer := 16#13#; -- i2c SDA=Z SCL=1 (Write)
+	constant mmu_i2cMR : integer := 16#14#; -- i2C Most Recent Eight Bits (Read)
+	constant mmu_x1cfg : integer := 16#15#; -- X1 Configuration (Write)
+	constant mmu_x2cfg : integer := 16#16#; -- X2 Configuration (Write)
+	constant mmu_x3cfg : integer := 16#17#; -- X3 Configuration (Write)
+	constant mmu_x4cfg : integer := 16#18#; -- X4 Configuration (Write)
+	constant mmu_sacc  : integer := 16#19#; -- Sample Accumulator Control (Write/Strobe)
+	
+-- Microcontroller
 	subtype mcu_addr_type is std_logic_vector(addr_len-1 downto 0);
 	subtype mcu_instr_type is std_logic_vector(instr_len-1 downto 0);
 	signal prog_cntr, mcu_addr : mcu_addr_type;
 	signal prog_data : mcu_instr_type;
 	signal mcu_data_out, mcu_data_in : byte_type;
 	signal WDS, RDS, IRQ, ISRV, CKEN : boolean;
-	signal CK : std_logic;
+	signal CK, RAMWR : std_logic;
 
--- MCU Registers
-	signal df_reg : byte_type;
+-- Microcontroller Registers
+	signal df_reg : nibble_type;
 	
 -- Telemetry Dispatcher.
 	signal TDWRSM, -- Telemetry Dispatcher Write to Sample Memory
@@ -592,7 +635,7 @@ begin
 	Instruction_Memory : entity ROM
 		port map (
 			Address => prog_cntr,
-			OutClock => not CK,
+			OutClock => not FCK,
 			OutClockEn => '1',
 			Reset => '0',
 			Q => prog_data
@@ -621,11 +664,60 @@ begin
 		
 -- The Memory Management Unit (MMU)
 	MMU : process (all) is 
-	
+		variable full_addr : natural range 0 to (2**addr_len)-1;
+		variable low_addr : natural range 0 to 255;
+
 	begin
-		if rising_edge(FCK) then
-			if (mcu_addr = "000000000") then
-				df_reg <= mcu_data_out;
+		-- These signals develop after the CPU asserts a new address
+		-- along with Data Strobe (DS). They will be ready before the 
+		-- falling edge of the CK.
+		full_addr := to_integer(unsigned(mcu_addr));
+		low_addr := to_integer(unsigned(mcu_addr(7 downto 0)));
+		
+		-- Combinatorial memory map, which serves all access except 
+		-- for writing to control registers.
+		mcu_data_in <= (others => '0');
+		case full_addr is
+			when mmu_const_bot to mmu_const_top =>
+				mcu_data_in <= mcu_addr(7 downto 0);
+			when mmu_ram_bot to mmu_ram_top =>
+				if not WDS then
+					mcu_data_in <= x"FF";
+				else
+					RAMWR <= to_std_logic(WDS);
+				end if;
+			when mmu_ctrl_bot to mmu_ctrl_top =>
+				if not WDS then
+					case low_addr is
+						when others =>
+							null;
+					end case;
+				end if;
+			when others =>
+				null;
+		end case;
+		
+		-- Control register write access memory map. Writes take place on 
+		-- the rising edge of CK. We use RESET to clear some registers and 
+		-- signals, but not all. In particular, we do not clear Software 
+		-- Reset (SWRST) on RESET because we want SWRST itself to cause 
+		-- RESET to be asserted for one full CK period. After a reset, the
+		-- cpu address will not select the SWRST location, so SWRST will 
+		-- be cleared on the next rising edge of CK.
+		if (RESET = '1') then
+			df_reg <= (others => '0');
+		elsif rising_edge(CK) then
+			SWRST <= false;
+			if WDS and (full_addr >= mmu_ctrl_bot) and (full_addr <= mmu_ctrl_top) then
+				case low_addr is
+
+					-- The diagnostic flag register. These bits can be routed
+					-- to test points for diagnostics.
+					when mmu_dfr  => 
+						df_reg <= mcu_data_out(3 downto 0);
+					
+					when others => null;
+				end case;
 			end if;
 		end if;
 	end process;
