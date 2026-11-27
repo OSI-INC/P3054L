@@ -43,7 +43,8 @@
 -- from 378 to 495 LUTs. Decide to abandon LUT-based I2C Master and
 -- Sensor Reader and instead try using the RCM5.
 
--- V2.7 [26-NOV-26] Add RMC5 processor.
+-- V2.7 [27-NOV-26] Add RMC5 processor, MMU, and implement program
+-- that toggles TP. Working, size is 620 LUTs.
 
 
 library ieee;  
