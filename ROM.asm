@@ -20,14 +20,14 @@ main:
 
 loop:
     ld A,(1)
-    ld (0x14A),A
+    ld (0x020A),A
     ld A,(0)
-    ld (0x14A),A
+    ld (0x020A),A
     jp loop
 
 push A            ; Save A.
 ld A,(cntr)       ; Load counter,
-add A,(1)     ; increment,
+add A,(1)         ; increment,
 ld (cntr),A       ; and store.
 rr A              ; Shift right
 rr A              ; a total
