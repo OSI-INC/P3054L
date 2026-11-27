@@ -46,8 +46,9 @@
 -- V2.7 [27-NOV-26] Add RMC5 processor, MMU, and implement program
 -- that toggles TP. Working, size is 620 LUTs.
 
+-- V2.8 [27-NOV-26] 
 
-library ieee;  
+library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
@@ -87,7 +88,6 @@ entity main is
 	constant fck_i2c_div : natural := 5;
 
 -- Configuration and Calibration of Transmitter.
-	constant td_chan_default : natural := 1;
 	constant frequency_step : positive := 1; 
 	constant frequency_low : natural := 6;
 	
@@ -158,6 +158,8 @@ architecture behavior of main is
 -- Telemetry Manager
 	signal tm_addr : smem_addr_type; -- Manager Sample Select
 	signal adc_shift : natural range 0 to 4; -- ADC sample left shift.
+	subtype transmit_shift_type is std_logic_vector(3 downto 0);
+	signal transmit_shift : transmit_shift_Type;
 		
 -- ADC Reader
 	signal ADCCAL, -- Calibrate the Selected ADC
@@ -186,37 +188,37 @@ architecture behavior of main is
 	constant mmu_ctrl_top  : natural := 16#02FF#;
 	constant mmu_cmd_bot   : natural := 16#0300#;
 	constant mmu_cmd_top   : natural := 16#03FF#;
+	constant mmu_ralen : positive := 5; -- Register Address Length
 	
 -- Register Locations. We specify the offset from the start of the control
 -- space. When a location is a control register shadowed in RAM, we say it 
 -- is "Write/Readback". When writing to a location stores a value, we say
 -- "Write". When a location can be read but not written, we say it is 
 -- "Read". When writing or reading initiates a process we say "Strobe". 
-	constant mmu_irqb  : integer := 16#00#; -- Interrupt Request Bits (Read)
-	constant mmu_irst  : integer := 16#02#; -- Interrupt Reset Bits (Write)
-	constant mmu_acfg  : integer := 16#03#; -- Amplifier Configuration (Write)
-	constant mmu_led   : integer := 16#04#; -- Lamp Switch (Write)
-	constant mmu_rst   : integer := 16#05#; -- Software Reset (Write)
-	constant mmu_xhb   : integer := 16#06#; -- Transmit HI Byte (Write)
-	constant mmu_xlb   : integer := 16#07#; -- Transmit LO Byte (Write)
-	constant mmu_xch   : integer := 16#08#; -- Transmit Channel Number (Write/Strobe)
-	constant mmu_rfc   : integer := 16#09#; -- Radio Frequency Calibration (Write)	
-	constant mmu_dfr   : integer := 16#0A#; -- Diagnostic Flags (Write)
-	constant mmu_sr    : integer := 16#0B#; -- Status Register (Read)
-	constant mmu_cmp   : integer := 16#0C#; -- Command Memory Portal (Read/Write/Strobe)
-	constant mmu_fck   : integer := 16#0D#; -- Fast Clock Mask (Write)
-	constant mmu_i2c00 : integer := 16#0E#; -- i2c SDA=0 SCL=0 (Write)
-	constant mmu_i2c01 : integer := 16#0F#; -- i2c SDA=0 SCL=1 (Write)
-	constant mmu_i2cA0 : integer := 16#10#; -- i2c SDA=A SCL=0 (Write)
-	constant mmu_i2cA1 : integer := 16#11#; -- i2c SDA=A SCL=1 (Write)
-	constant mmu_i2cZ0 : integer := 16#12#; -- i2c SDA=Z SCL=0 (Write)
-	constant mmu_i2cZ1 : integer := 16#13#; -- i2c SDA=Z SCL=1 (Write)
-	constant mmu_i2cMR : integer := 16#14#; -- i2C Most Recent Eight Bits (Read)
-	constant mmu_x1cfg : integer := 16#15#; -- X1 Configuration (Write)
-	constant mmu_x2cfg : integer := 16#16#; -- X2 Configuration (Write)
-	constant mmu_x3cfg : integer := 16#17#; -- X3 Configuration (Write)
-	constant mmu_x4cfg : integer := 16#18#; -- X4 Configuration (Write)
-	constant mmu_sacc  : integer := 16#19#; -- Sample Accumulator Control (Write/Strobe)
+	constant mmu_irqb  : natural := 16#00#; -- Interrupt Request Bits (Read)
+	constant mmu_irst  : natural := 16#02#; -- Interrupt Reset Bits (Write)
+	constant mmu_acfg  : natural := 16#03#; -- Amplifier Configuration (Write)
+	constant mmu_led   : natural := 16#04#; -- Lamp Switch (Write)
+	constant mmu_rst   : natural := 16#05#; -- Software Reset (Write)
+	constant mmu_xch   : natural := 16#08#; -- Transmit Channel Number (Write/Strobe)
+	constant mmu_rfc   : natural := 16#09#; -- Radio Frequency Calibration (Write)	
+	constant mmu_dfr   : natural := 16#0A#; -- Diagnostic Flags (Write)
+	constant mmu_sr    : natural := 16#0B#; -- Status Register (Read)
+	constant mmu_cmp   : natural := 16#0C#; -- Command Memory Portal (Read/Write/Strobe)
+	constant mmu_fck   : natural := 16#0D#; -- Fast Clock Mask (Write)
+	constant mmu_i2c00 : natural := 16#0E#; -- i2c SDA=0 SCL=0 (Write)
+	constant mmu_i2c01 : natural := 16#0F#; -- i2c SDA=0 SCL=1 (Write)
+	constant mmu_i2cA0 : natural := 16#10#; -- i2c SDA=A SCL=0 (Write)
+	constant mmu_i2cA1 : natural := 16#11#; -- i2c SDA=A SCL=1 (Write)
+	constant mmu_i2cZ0 : natural := 16#12#; -- i2c SDA=Z SCL=0 (Write)
+	constant mmu_i2cZ1 : natural := 16#13#; -- i2c SDA=Z SCL=1 (Write)
+	constant mmu_i2cMR : natural := 16#14#; -- i2C Most Recent Eight Bits (Read)
+	constant mmu_x1cfg : natural := 16#15#; -- X1 Configuration (Write)
+	constant mmu_x2cfg : natural := 16#16#; -- X2 Configuration (Write)
+	constant mmu_x3cfg : natural := 16#17#; -- X3 Configuration (Write)
+	constant mmu_x4cfg : natural := 16#18#; -- X4 Configuration (Write)
+	constant mmu_saddr : natural := 16#19#; -- Sample Memory Addr (Write)
+	constant mmu_sacc  : natural := 16#1A#; -- Sample Accumulator Control (Write/Strobe)
 	
 -- Microcontroller
 	subtype mcu_addr_type is std_logic_vector(mcu_addr_len-1 downto 0);
@@ -239,8 +241,6 @@ architecture behavior of main is
 		TDBSY -- Telemetry Dispatcher Busy
 		: boolean := false;
 	signal td_addr : smem_addr_type; -- Dispatcher Sample Select
-	subtype transmit_shift_type is std_logic_vector(3 downto 0);
-	signal transmit_shift : transmit_shift_Type;
 
 -- Message Transmission. The syn_keep and nomerge reduce code size 
 -- slightly.
@@ -636,7 +636,7 @@ begin
 	Instruction_Memory : entity ROM
 		port map (
 			Address => prog_cntr(8 downto 0),
-			OutClock => not FCK,
+			OutClock => not TCK,
 			OutClockEn => '1',
 			Reset => '0',
 			Q => prog_data
@@ -659,21 +659,21 @@ begin
 			IRQ => false,
 			ISRV => ISRV,
 			RESET => RESET,
-			CK => FCK,
+			CK => TCK,
 			CKEN => true
 		);
 		
 -- The Memory Management Unit (MMU)
 	MMU : process (all) is 
 		variable full_addr : natural range 0 to (2**mcu_addr_len)-1;
-		variable low_addr : natural range 0 to 255;
+		variable low_addr : natural range 0 to (2**mmu_ralen)-1;
 
 	begin
 		-- These signals develop after the CPU asserts a new address
 		-- along with Data Strobe (DS). They will be ready before the 
 		-- falling edge of the CK.
 		full_addr := to_integer(unsigned(mcu_addr));
-		low_addr := to_integer(unsigned(mcu_addr(7 downto 0)));
+		low_addr := to_integer(unsigned(mcu_addr(mmu_ralen-1 downto 0)));
 		
 		-- By default, don't write to RAM.
 		RAMWR <= '0';
@@ -682,23 +682,25 @@ begin
 		-- for writing to control registers.
 		mcu_data_in <= (others => '0');
 		case full_addr is
-			when mmu_const_bot to mmu_const_top =>
-				mcu_data_in <= mcu_addr(7 downto 0);
-			when mmu_ram_bot to mmu_ram_top =>
-				if not WDS then
-					mcu_data_in <= x"FF";
-				else
-					RAMWR <= to_std_logic(WDS);
-				end if;
-			when mmu_ctrl_bot to mmu_ctrl_top =>
-				if not WDS then
-					case low_addr is
-						when others =>
-							null;
-					end case;
-				end if;
-			when others =>
-				null;
+		when mmu_const_bot to mmu_const_top =>
+			mcu_data_in <= mcu_addr(7 downto 0);
+		when mmu_ram_bot to mmu_ram_top =>
+			if not WDS then
+				mcu_data_in <= x"FF";
+			else
+				RAMWR <= to_std_logic(WDS);
+			end if;
+		when mmu_ctrl_bot to mmu_ctrl_top =>
+			if not WDS then
+				case low_addr is
+				when mmu_irqb =>
+					mcu_data_in(0) <= to_std_logic(TDRQ xor TDACK);
+				when others =>
+					null;
+				end case;
+			end if;
+		when others =>
+			null;
 		end case;
 		
 		-- Control register write access memory map. Writes take place on 
@@ -710,229 +712,30 @@ begin
 		-- be cleared on the next rising edge of CK.
 		if (RESET = '1') then
 			df_reg <= (others => '0');
-		elsif rising_edge(FCK) then
+		elsif rising_edge(TCK) then
 			SWRST <= false;
-			if WDS and (full_addr >= mmu_ctrl_bot) and (full_addr <= mmu_ctrl_top) then
-				case low_addr is
-
-					-- The diagnostic flag register. These bits can be routed
-					-- to test points for diagnostics.
-					when mmu_dfr  => 
-						df_reg <= mcu_data_out(3 downto 0);
-					
-					when others => null;
-				end case;
-			end if;
-		end if;
-	end process;
-		
--- The Telemetry Dispatcher runs off the falling edge of FCK. It
--- arranges for transmission of values stored in the sample memory.
-	Telemetry_Dispatcher : process (all) is
-		variable state, next_state : natural range 0 to 31 := 0;
-		constant td_idle : natural := 0;
-		constant td_tx1  : natural := 1;
-		constant td_wx1  : natural := 2;
-		constant td_cx1  : natural := 3;
-		constant td_tx2  : natural := 4;
-		constant td_wx2  : natural := 5;
-		constant td_cx2  : natural := 6;
-		constant td_tx3  : natural := 7;
-		constant td_wx3  : natural := 8;
-		constant td_cx3  : natural := 9;
-		constant td_tx4  : natural := 10;
-		constant td_wx4  : natural := 11;
-		constant td_cx4  : natural := 12;
-		constant td_ttp  : natural := 13;
-		constant td_wtp  : natural := 14;
-		constant td_ctp  : natural := 15;
-		constant td_done : natural := 16;
-		variable x1_idx, x2_idx, x3_idx, x4_idx, tp_idx 
-			: natural range 0 to 15;
-		
-	begin
-		if RESET = '1' then
-			state := td_idle;
-			x1_idx := 0;
-			x2_idx := 0;
-			x3_idx := 0;
-			x4_idx := 0;
-			tp_idx := 0;
-			td_chan <= 0;
-			TDBSY <= false;
-			TDRSTACC <= '0';
-			TDWRSM <= '0';
-			TDACK <= false;
-			TXI <= false;
-		elsif falling_edge(FCK) then
-			TDRSTACC <= '0';
-			TDWRSM <= '0';
 			TXI <= false;
 			
-			if (TDRQ xor TDACK) then
-				case state is
-					when td_idle =>
-						next_state := td_tx1;
-						
-					-- Transmit the X1 sample.
-					when td_tx1 =>
-						td_chan <= x1_chan;
-						td_addr <= x1_addr;
-						if (x1_pd = 0) then
-							next_state := td_tx2;
-						elsif (x1_idx = 0) then
-							TXI <= true;
-							if TXA then
-								next_state := td_wx1;
-							else
-								next_state := td_tx1;
-							end if;
-						else
-							x1_idx := x1_idx-1;
-							next_state := td_tx2;
-						end if;
-					when td_wx1 =>
-						if TXA then
-							next_state := td_wx1;
-						else
-							next_state := td_cx1;
-						end if;
-					when td_cx1 =>
-						TDRSTACC <= '1';
-						TDWRSM <= '1';
-						x1_idx := x1_pd-1;
-						next_state := td_tx2;
-
-					-- Transmit the X2 sample.
-					when td_tx2 =>
-						td_chan <= x2_chan;
-						td_addr <= x2_addr;
-						if (x2_pd = 0) then
-							next_state := td_tx3;
-						elsif (x2_idx = 0) then
-							TXI <= true;
-							if TXA then
-								next_state := td_wx2;
-							else
-								next_state := td_tx2;
-							end if;
-						else
-							x2_idx := x2_idx-1;
-							next_state := td_tx3;
-						end if;
-					when td_wx2 =>
-						if TXA then
-							next_state := td_wx2;
-						else
-							next_state := td_cx2;
-						end if;
-					when td_cx2 =>
-						TDRSTACC <= '1';
-						TDWRSM <= '1';
-						x2_idx := x2_pd-1;
-						next_state := td_tx3;
-
-					-- Transmit the X3 sample.
-					when td_tx3 =>
-						td_chan <= x3_chan;
-						td_addr <= x3_addr;
-						if (x3_pd = 0) then
-							next_state := td_tx4;
-						elsif (x3_idx = 0) then
-							TXI <= true;
-							if TXA then
-								next_state := td_wx3;
-							else
-								next_state := td_tx3;
-							end if;
-						else
-							x3_idx := x3_idx-1;
-							next_state := td_tx4;
-						end if;
-					when td_wx3 =>
-						if TXA then
-							next_state := td_wx3;
-						else
-							next_state := td_cx3;
-						end if;
-					when td_cx3 =>
-						TDRSTACC <= '1';
-						TDWRSM <= '1';
-						x3_idx := x3_pd-1;
-						next_state := td_tx4;
-
-					-- Transmit the X4 sample.
-					when td_tx4 =>
-						td_chan <= x4_chan;
-						td_addr <= x4_addr;
-						if (x4_pd = 0) then
-							next_state := td_ttp;
-						elsif (x4_idx = 0) then
-							TXI <= true;
-							if TXA then
-								next_state := td_wx4;
-							else
-								next_state := td_tx4;
-							end if;
-						else
-							x4_idx := x4_idx-1;
-							next_state := td_ttp;
-						end if;
-					when td_wx4 =>
-						if TXA then
-							next_state := td_wx4;
-						else
-							next_state := td_cx4;
-						end if;
-					when td_cx4 =>
-						TDRSTACC <= '1';
-						TDWRSM <= '1';
-						x4_idx := x4_pd-1;
-						next_state := td_ttp;
-
-					-- Transmit the temperature.
-					when td_ttp =>
-						td_chan <= tp_chan;
-						td_addr <= tp_addr;
-						if (tp_pd = 0) then
-							next_state := td_done;
-						elsif (tp_idx = 0) then
-							TXI <= true;
-							if TXA then
-								next_state := td_wtp;
-							else
-								next_state := td_ttp;
-							end if;
-						else
-							tp_idx := tp_idx-1;
-							next_state := td_done;
-						end if;
-					when td_wtp =>
-						if TXA then
-							next_state := td_wtp;
-						else
-							next_state := td_ctp;
-						end if;
-					when td_ctp =>
-						TDRSTACC <= '1';
-						TDWRSM <= '1';
-						tp_idx := tp_pd-1;
-						next_state := td_done;
-						
-					when td_done => 
-						next_state := td_idle;
+			if WDS and (full_addr >= mmu_ctrl_bot) and (full_addr <= mmu_ctrl_top) then
+				case low_addr is
+				when mmu_irst =>
+					if (mcu_data_out(0) = '1') then
 						TDACK <= TDRQ;
-						
-					when others =>
-						next_state := td_idle;
+					end if;
+				when mmu_dfr => 
+					df_reg <= mcu_data_out(3 downto 0);
+				when mmu_xch =>
+					td_chan <= to_integer(unsigned(mcu_data_out));
+					TXI <= true;
+				when mmu_saddr =>
+					td_addr <= mcu_data_out(smem_addr_len-1 downto 0);
+				when mmu_sacc =>
+					TDRSTACC <= mcu_data_out(0);					
+					TDWRSM <= mcu_data_out(1);
+					TDBSY <= (mcu_data_out(2) = '1');
+				when others => null;
 				end case;
-			else
-				next_state := td_idle;
 			end if;
-
-			TDBSY <= (next_state /= td_idle);
-
-			state := next_state;
 		end if;
 	end process;
 
