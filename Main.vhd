@@ -196,40 +196,38 @@ architecture behavior of main is
 -- "Write". When a location can be read but not written, we say it is 
 -- "Read". When writing or reading initiates a process we say "Strobe". 
 	constant mmu_irqb  : natural := 16#00#; -- Interrupt Request Bits (Read)
-	constant mmu_irst  : natural := 16#02#; -- Interrupt Reset Bits (Write)
-	constant mmu_acfg  : natural := 16#03#; -- Amplifier Configuration (Write)
-	constant mmu_led   : natural := 16#04#; -- Lamp Switch (Write)
-	constant mmu_rst   : natural := 16#05#; -- Software Reset (Write)
-	constant mmu_xch   : natural := 16#08#; -- Transmit Channel Number (Write/Strobe)
-	constant mmu_rfc   : natural := 16#09#; -- Radio Frequency Calibration (Write)	
-	constant mmu_dfr   : natural := 16#0A#; -- Diagnostic Flags (Write)
-	constant mmu_sr    : natural := 16#0B#; -- Status Register (Read)
-	constant mmu_cmp   : natural := 16#0C#; -- Command Memory Portal (Read/Write/Strobe)
-	constant mmu_fck   : natural := 16#0D#; -- Fast Clock Mask (Write)
-	constant mmu_i2c00 : natural := 16#0E#; -- i2c SDA=0 SCL=0 (Write)
-	constant mmu_i2c01 : natural := 16#0F#; -- i2c SDA=0 SCL=1 (Write)
-	constant mmu_i2cA0 : natural := 16#10#; -- i2c SDA=A SCL=0 (Write)
-	constant mmu_i2cA1 : natural := 16#11#; -- i2c SDA=A SCL=1 (Write)
-	constant mmu_i2cZ0 : natural := 16#12#; -- i2c SDA=Z SCL=0 (Write)
-	constant mmu_i2cZ1 : natural := 16#13#; -- i2c SDA=Z SCL=1 (Write)
-	constant mmu_i2cMR : natural := 16#14#; -- i2C Most Recent Eight Bits (Read)
-	constant mmu_x1cfg : natural := 16#15#; -- X1 Configuration (Write)
-	constant mmu_x2cfg : natural := 16#16#; -- X2 Configuration (Write)
-	constant mmu_x3cfg : natural := 16#17#; -- X3 Configuration (Write)
-	constant mmu_x4cfg : natural := 16#18#; -- X4 Configuration (Write)
-	constant mmu_saddr : natural := 16#19#; -- Sample Memory Addr (Write)
-	constant mmu_sacc  : natural := 16#1A#; -- Sample Accumulator Control (Write/Strobe)
+	constant mmu_irst  : natural := 16#01#; -- Interrupt Reset Bits (Write)
+	constant mmu_acfg  : natural := 16#02#; -- Amplifier Configuration (Write)
+	constant mmu_led   : natural := 16#03#; -- Lamp Switch (Write)
+	constant mmu_rst   : natural := 16#04#; -- Software Reset (Write)
+	constant mmu_xch   : natural := 16#05#; -- Transmit Channel Number (Write/Strobe)
+	constant mmu_rfc   : natural := 16#06#; -- Radio Frequency Calibration (Write)	
+	constant mmu_dfr   : natural := 16#07#; -- Diagnostic Flags (Write)
+	constant mmu_sr    : natural := 16#08#; -- Status Register (Read)
+	constant mmu_cmp   : natural := 16#09#; -- Command Memory Portal (Read/Write/Strobe)
+	constant mmu_fck   : natural := 16#0A#; -- Fast Clock Mask (Write)
+	constant mmu_i2c00 : natural := 16#0B#; -- i2c SDA=0 SCL=0 (Write)
+	constant mmu_i2c01 : natural := 16#0C#; -- i2c SDA=0 SCL=1 (Write)
+	constant mmu_i2cA0 : natural := 16#0D#; -- i2c SDA=A SCL=0 (Write)
+	constant mmu_i2cA1 : natural := 16#0E#; -- i2c SDA=A SCL=1 (Write)
+	constant mmu_i2cZ0 : natural := 16#0F#; -- i2c SDA=Z SCL=0 (Write)
+	constant mmu_i2cZ1 : natural := 16#10#; -- i2c SDA=Z SCL=1 (Write)
+	constant mmu_i2cMR : natural := 16#11#; -- i2C Most Recent Eight Bits (Read)
+	constant mmu_x1cfg : natural := 16#12#; -- X1 Configuration (Write)
+	constant mmu_x2cfg : natural := 16#13#; -- X2 Configuration (Write)
+	constant mmu_x3cfg : natural := 16#14#; -- X3 Configuration (Write)
+	constant mmu_x4cfg : natural := 16#15#; -- X4 Configuration (Write)
+	constant mmu_saddr : natural := 16#16#; -- Sample Memory Addr (Write)
+	constant mmu_sacc  : natural := 16#17#; -- Sample Accumulator Control (Write/Strobe)
 	
--- Microcontroller
+-- Microcontroller Flags, Buses, and Registers
 	subtype mcu_addr_type is std_logic_vector(mcu_addr_len-1 downto 0);
 	subtype mcu_instr_type is std_logic_vector(mcu_instr_len-1 downto 0);
 	signal prog_cntr, mcu_addr : mcu_addr_type;
 	signal prog_data : mcu_instr_type;
 	signal mcu_data_out, mcu_data_in : byte_type;
-	signal WDS, RDS, IRQ, ISRV, CKEN : boolean;
+	signal WDS, CKEN : boolean;
 	signal RAMWR : std_logic;
-
--- Microcontroller Registers
 	signal df_reg : nibble_type;
 	
 -- Telemetry Dispatcher.
@@ -642,7 +640,7 @@ begin
 			Q => prog_data
 		);
 		
--- The Reduced Instruction Set Microctontroller (RMC5).
+-- The Reduced Instruction Set Microcontroller (RMC5).
 	Microcontroller : entity RMC5_MCU
 		generic map (
 			addr_len => mcu_addr_len,
@@ -655,23 +653,20 @@ begin
 			mcu_data_in => mcu_data_in,
 			mcu_addr => mcu_addr,
 			WDS => WDS,
-			RDS => RDS,
 			IRQ => false,
-			ISRV => ISRV,
 			RESET => RESET,
 			CK => TCK,
 			CKEN => true
 		);
-		
+	
 -- The Memory Management Unit (MMU)
 	MMU : process (all) is 
 		variable full_addr : natural range 0 to (2**mcu_addr_len)-1;
 		variable low_addr : natural range 0 to (2**mmu_ralen)-1;
 
 	begin
-		-- These signals develop after the CPU asserts a new address
-		-- along with Data Strobe (DS). They will be ready before the 
-		-- falling edge of the CK.
+		-- These signals develop after the CPU asserts a new address. 
+		-- They will be ready before the falling edge of the CK.
 		full_addr := to_integer(unsigned(mcu_addr));
 		low_addr := to_integer(unsigned(mcu_addr(mmu_ralen-1 downto 0)));
 		
@@ -712,9 +707,16 @@ begin
 		-- be cleared on the next rising edge of CK.
 		if (RESET = '1') then
 			df_reg <= (others => '0');
+			TXI <= false;
+			TDACK <= false;
+			TDBSY <= false;
+			TDWRSM <= '0';
+			TDRSTACC <= '0';
 		elsif rising_edge(TCK) then
 			SWRST <= false;
 			TXI <= false;
+			TDWRSM <= '0';
+			TDRSTACC <= '0';
 			
 			if WDS and (full_addr >= mmu_ctrl_bot) and (full_addr <= mmu_ctrl_top) then
 				case low_addr is
