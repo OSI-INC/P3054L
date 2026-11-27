@@ -227,10 +227,10 @@ architecture behavior of main is
 	signal prog_cntr, mcu_addr : mcu_addr_type;
 	signal prog_data : mcu_instr_type;
 	signal mcu_data_out, mcu_data_in, ram_data : byte_type;
-	signal WDS, CKEN : boolean;
+	signal WDS : boolean;
 	signal RAMWR : std_logic;
 	signal df_reg : nibble_type;
-	
+
 -- Telemetry Dispatcher.
 	signal TDWRSM, -- Telemetry Dispatcher Write to Sample Memory
 		TDRSTACC -- Telemetry Dispatcher Resets Accumulator
@@ -710,22 +710,17 @@ begin
 		when mmu_const_bot to mmu_const_top =>
 			mcu_data_in <= mcu_addr(7 downto 0);
 		when mmu_ram_bot to mmu_ram_top =>
-			if not WDS then
-				mcu_data_in <= ram_data;
-			else
-				RAMWR <= to_std_logic(WDS);
-			end if;
+			mcu_data_in <= ram_data;
+			RAMWR <= to_std_logic(WDS);
 		when mmu_ctrl_bot to mmu_ctrl_top =>
-			if not WDS then
-				case low_addr is
-				when mmu_irqb =>
-					mcu_data_in(0) <= to_std_logic(TDRQ xor TDACK);
-				when mmu_i2cMR => 
-					mcu_data_in <= i2c_in;
-				when others =>
-					null;
-				end case;
-			end if;
+			case low_addr is
+			when mmu_irqb =>
+				mcu_data_in(0) <= to_std_logic(TDRQ xor TDACK);
+			when mmu_i2cMR => 
+				mcu_data_in <= i2c_in;
+			when others =>
+				null;
+			end case;
 		when others =>
 			null;
 		end case;
