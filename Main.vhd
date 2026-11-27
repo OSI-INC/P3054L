@@ -48,11 +48,12 @@
 
 -- V2.8 [27-NOV-26] Delete Telemetry Dispatcher and replace with 
 -- microcontroller Software Dispatcher. Add 32-Byte RAM. Have one
--- EBR working as instruction memory. Transmission working, size is
--- 635 LUTs, 2 EBR. All connections needed for I2C and sample 
--- shift into sample memory are in place. Command interpreter still 
--- in LUTs, no run timer implemented.
-
+-- EBR working as 512-location instruction memory. Transmission 
+-- working. Move command interpreter into Software Dispatcher.
+-- Make all connections necessary for the dispatcher to interpret
+-- commands. All I2C connections to dispatcher in place. Fast 
+-- clock enabling set up. Size is 619 LUTs and 2 EBR. Maximum
+-- FCK speed 54 MHz, TCK 27 MHz.
 
 
 library ieee;
@@ -1169,7 +1170,7 @@ begin
 		WrClock => RCK,
 		WrEn => CMWR,
 		Data => cmd_in,
-		RdClock => TCK,
+		RdClock => not TCK,
 		RdEn => CMRD,
 		AlmostEmpty => CME,
 		Full => CMF,
