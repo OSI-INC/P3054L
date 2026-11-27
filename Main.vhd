@@ -171,10 +171,10 @@ architecture behavior of main is
 		: std_logic;
 
 -- Configuration of RMC5 Microcontroller.
-	constant addr_len : positive := 9;
-	constant stack_len : positive := 4;
-	constant opcode_len : positive := 5;
-	constant instr_len : positive := addr_len + opcode_len;
+	constant mcu_addr_len : positive := 10;
+	constant mcu_sp_len : positive := 4;
+	constant mcu_opcode_len : positive := 5;
+	constant mcu_instr_len : positive := mcu_addr_len + mcu_opcode_len;
 
 -- Memory Map Constants, sizes and base addresses.
 	constant mmu_const_bot : natural := 16#0000#;
@@ -218,13 +218,13 @@ architecture behavior of main is
 	constant mmu_sacc  : integer := 16#19#; -- Sample Accumulator Control (Write/Strobe)
 	
 -- Microcontroller
-	subtype mcu_addr_type is std_logic_vector(addr_len-1 downto 0);
-	subtype mcu_instr_type is std_logic_vector(instr_len-1 downto 0);
+	subtype mcu_addr_type is std_logic_vector(mcu_addr_len-1 downto 0);
+	subtype mcu_instr_type is std_logic_vector(mcu_instr_len-1 downto 0);
 	signal prog_cntr, mcu_addr : mcu_addr_type;
 	signal prog_data : mcu_instr_type;
 	signal mcu_data_out, mcu_data_in : byte_type;
 	signal WDS, RDS, IRQ, ISRV, CKEN : boolean;
-	signal CK, RAMWR : std_logic;
+	signal RAMWR : std_logic;
 
 -- Microcontroller Registers
 	signal df_reg : nibble_type;
@@ -634,7 +634,7 @@ begin
 -- The microcontroller instruction memory
 	Instruction_Memory : entity ROM
 		port map (
-			Address => prog_cntr,
+			Address => prog_cntr(8 downto 0),
 			OutClock => not FCK,
 			OutClockEn => '1',
 			Reset => '0',
@@ -644,8 +644,8 @@ begin
 -- The Reduced Instruction Set Microctontroller (RMC5).
 	Microcontroller : entity RMC5_MCU
 		generic map (
-			addr_len => 9,
-			sp_len => 4
+			addr_len => mcu_addr_len,
+			sp_len => mcu_sp_len
 		)
 		port map (
 			prog_cntr => prog_cntr,
@@ -655,7 +655,7 @@ begin
 			mcu_addr => mcu_addr,
 			WDS => WDS,
 			RDS => RDS,
-			IRQ => IRQ,
+			IRQ => false,
 			ISRV => ISRV,
 			RESET => RESET,
 			CK => FCK,
@@ -664,7 +664,7 @@ begin
 		
 -- The Memory Management Unit (MMU)
 	MMU : process (all) is 
-		variable full_addr : natural range 0 to (2**addr_len)-1;
+		variable full_addr : natural range 0 to (2**mcu_addr_len)-1;
 		variable low_addr : natural range 0 to 255;
 
 	begin
@@ -673,6 +673,9 @@ begin
 		-- falling edge of the CK.
 		full_addr := to_integer(unsigned(mcu_addr));
 		low_addr := to_integer(unsigned(mcu_addr(7 downto 0)));
+		
+		-- By default, don't write to RAM.
+		RAMWR <= '0';
 		
 		-- Combinatorial memory map, which serves all access except 
 		-- for writing to control registers.
@@ -706,7 +709,7 @@ begin
 		-- be cleared on the next rising edge of CK.
 		if (RESET = '1') then
 			df_reg <= (others => '0');
-		elsif rising_edge(CK) then
+		elsif rising_edge(FCK) then
 			SWRST <= false;
 			if WDS and (full_addr >= mmu_ctrl_bot) and (full_addr <= mmu_ctrl_top) then
 				case low_addr is

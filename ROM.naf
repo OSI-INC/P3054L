@@ -10,6 +10,7 @@ Address[0]  i
 OutClock  i
 OutClockEn  i
 Reset  i
+Q[14]  o
 Q[13]  o
 Q[12]  o
 Q[11]  o

@@ -16,7 +16,7 @@ architecture test of tb is
     component ROM
         port (Address : in std_logic_vector(8 downto 0); 
         OutClock: in std_logic; OutClockEn: in std_logic; 
-        Reset: in std_logic; Q : out std_logic_vector(13 downto 0)
+        Reset: in std_logic; Q : out std_logic_vector(14 downto 0)
     );
     end component;
 
@@ -24,7 +24,7 @@ architecture test of tb is
     signal OutClock: std_logic := '0';
     signal OutClockEn: std_logic := '0';
     signal Reset: std_logic := '0';
-    signal Q : std_logic_vector(13 downto 0);
+    signal Q : std_logic_vector(14 downto 0);
 begin
     u1 : ROM
         port map (Address => Address, OutClock => OutClock, OutClockEn => OutClockEn, 

@@ -18,6 +18,13 @@ const cntr     0x21 ; Counter variable
 
 main:
 
+loop:
+    ld A,(1)
+    ld (0x14A),A
+    ld A,(0)
+    ld (0x14A),A
+    jp loop
+
 push A            ; Save A.
 ld A,(cntr)       ; Load counter,
 add A,(1)     ; increment,
