@@ -112,11 +112,6 @@ entity main is
 	constant x2_shift : natural range 0 to 7 := 3;
 	constant x3_shift : natural range 0 to 7 := 2;
 	constant x4_shift : natural range 0 to 7 := 1;
-	constant x1_chan : natural range 0 to 255 := 1;
-	constant x2_chan : natural range 0 to 255 := 3;
-	constant x3_chan : natural range 0 to 255 := 5;
-	constant x4_chan : natural range 0 to 255 := 7;	
-	constant tp_chan : natural range 0 to 255 := 9;
 end;
 
 architecture behavior of main is
@@ -188,8 +183,8 @@ architecture behavior of main is
 	constant mmu_ctrl_top  : natural := 16#02FF#;
 	constant mmu_cmd_bot   : natural := 16#0300#;
 	constant mmu_cmd_top   : natural := 16#03FF#;
-	constant mmu_ctrl_addr_len : positive := 5; -- Register Address Length
-	constant mmu_ram_addr_len : positive := 6; -- Process RAM Address Length
+	constant mmu_ctrl_len : positive := 5; -- Register Address Length
+	constant mmu_ram_len : positive := 5; -- Process RAM Address Length
 	
 -- Register Locations. We specify the offset from the start of the control
 -- space. When a location is a control register shadowed in RAM, we say it 
@@ -231,7 +226,7 @@ architecture behavior of main is
 	signal RAMWR : std_logic;
 	signal df_reg : nibble_type;
 
--- Telemetry Dispatcher.
+-- Software Dispatcher.
 	signal TDWRSM, -- Telemetry Dispatcher Write to Sample Memory
 		TDRSTACC -- Telemetry Dispatcher Resets Accumulator
 		: std_logic;
@@ -239,7 +234,7 @@ architecture behavior of main is
 		TDACK, -- Telemetry Dispatcher Acknowledge
 		TDBSY -- Telemetry Dispatcher Busy
 		: boolean := false;
-	signal td_addr : smem_addr_type; -- Dispatcher Sample Select
+	signal sd_addr : smem_addr_type; -- Software Dispatcher Sample Select
 
 -- Message Transmission. The syn_keep and nomerge reduce code size 
 -- slightly.
@@ -491,7 +486,7 @@ begin
 	Sample_Addr_Mux : process (all) is 
 	begin
 		if TDBSY then
-			smem_addr <= td_addr;
+			smem_addr <= sd_addr;
 		else
 			smem_addr <= tm_addr;
 		end if;
@@ -635,14 +630,14 @@ begin
 		NADC4 <= to_std_logic(not (ADCCS and (tm_addr = x4_addr)));
 	end process;
 
--- Microcontroller Instruction Memory. This is a read-only memory
--- that holds the program instructions. The instructions are not
+-- Software Dispatcher Instruction Memory. This read-only memory
+-- holds the dispatcher's program. The instructions are not
 -- bytes, but rather a concatination of a five-bit opcode and an
--- address. With a ten-bit address, the instructions are fifteen
--- bits wide and the instruction memory contains 1024 instructions.
--- The instruction memory must run on the falling edge of the MCU
--- clock.
-	Instruction_ROM : entity ROM
+-- address. With a ten-bit address, the instructions are 15 bits
+-- wide and the instruction memory is 1024 instructions deep.
+-- The instruction memory must run on the falling edge of the
+-- microcontroller clock.
+	Dispatcher_ROM : entity ROM
 		port map (
 			Address => prog_cntr(8 downto 0),
 			OutClock => not TCK,
@@ -650,12 +645,12 @@ begin
 			Reset => '0',
 			Q => prog_data
 		);
--- Microcontroller Process Random-Access Memmory (RAM). This is a-- single-port RAM built in LUTs. It is asynchronous on reads, 
--- which is a requirement of the RCM5 microcontroller. We write on
--- the rising edge of TCK.
-	Process_RAM : entity RAM
+-- The Software Dispatcher Process Memory. This is a single-port 
+-- RAM built in LUTs. We write on the rising edge of TCK and our
+-- reads are asynchronous.
+	Dispatcher_RAM : entity RAM
 		port map (
-			Address => mcu_addr(mmu_ram_addr_len-1 downto 0),
+			Address => mcu_addr(mmu_ram_len-1 downto 0),
 			Clock => TCK,
 			ClockEn => '1',
 			WE => RAMWR,
@@ -663,15 +658,17 @@ begin
 			Q => ram_data
 		);
 	
--- Reduced Instruction Set Microcontroller, Five-Bit Opcodes (RMC5).
--- We instantiate an RMC5, but we don't use all its port signals, and
+-- The Software Dispatcher is a microcontroller that performs several
+-- tasks in response to flags set by the Telemetry Manager, Command
+-- Receiver, and Power-Up processes. We instantiate an RMC5
+-- microcontroller, but we don't use all its port signals, and
 -- so obtain some reduction in its size. We do not drive its Interrupt
 -- Request (IRQ) or Clock Enable (CKEN) inputs. We do not use its 
 -- Interrupt Service (ISRV) or Read Data Strobe (RDS) outputs. The
 -- MCU runs of the Transmit Clock (TCK), which is half the Fast Clock
 -- (FCK). Because TCK runs off the falling edges of FCK, a TCK rising
 -- edge will occur just after an FCK falling edge.
-	Manager_MCU : entity RMC5_MCU
+	Software_Dispatcher : entity RMC5_MCU
 		generic map (
 			addr_len => mcu_addr_len,
 			sp_len => mcu_sp_len
@@ -689,16 +686,16 @@ begin
 			CKEN => true
 		);
 	
--- Memory Management Unit (MMU) for the Microcontroller.
-	MMU : process (all) is 
+-- Software Dispatcher Memory Management Unit.
+	Dispatcher_MMU : process (all) is 
 		variable full_addr : natural range 0 to (2**mcu_addr_len)-1;
-		variable low_addr : natural range 0 to (2**mmu_ctrl_addr_len)-1;
+		variable low_addr : natural range 0 to (2**mmu_ctrl_len)-1;
 
 	begin
 		-- These signals develop after the CPU asserts a new address. 
 		-- They will be ready before the falling edge of the CK.
 		full_addr := to_integer(unsigned(mcu_addr));
-		low_addr := to_integer(unsigned(mcu_addr(mmu_ctrl_addr_len-1 downto 0)));
+		low_addr := to_integer(unsigned(mcu_addr(mmu_ctrl_len-1 downto 0)));
 		
 		-- By default, don't write to RAM.
 		RAMWR <= '0';
@@ -744,7 +741,6 @@ begin
 			TXI <= false;
 			TDWRSM <= '0';
 			TDRSTACC <= '0';
-			
 			if WDS and (full_addr >= mmu_ctrl_bot) and (full_addr <= mmu_ctrl_top) then
 				case low_addr is
 				when mmu_irst =>
@@ -757,21 +753,11 @@ begin
 					td_chan <= to_integer(unsigned(mcu_data_out));
 					TXI <= true;
 				when mmu_saddr =>
-					td_addr <= mcu_data_out(smem_addr_len-1 downto 0);
+					sd_addr <= mcu_data_out(smem_addr_len-1 downto 0);
 				when mmu_sacc =>
 					TDRSTACC <= mcu_data_out(0);					
 					TDWRSM <= mcu_data_out(1);
 					TDBSY <= (mcu_data_out(2) = '1');
-					
-				-- The I2C bit-banging interface. Each write to one of these
-				-- locations sets both SDA and SCL to one of zero, one, or
-				-- high-impedance. We operate the I2C by writing register A
-				-- to these locations. Some locations take the top bit of A
-				-- and, when this bit is zero, drive SDA low. Others cause
-				-- the value of SDA to be shifted into the i2C byte register,
-				-- from which it can later be read out. With the CPU in boost
-				-- mode, the interface runs at 500 kHz. See the I2C assembler
-				-- routine for more details.
 				when mmu_i2c00 => 
 					SDA <= '0';
 					SCL <= '0';

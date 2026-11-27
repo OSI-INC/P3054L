@@ -14,14 +14,14 @@ end entity tb;
 architecture test of tb is 
 
     component RAM
-        port (Address : in std_logic_vector(5 downto 0); 
+        port (Address : in std_logic_vector(4 downto 0); 
         Data : in std_logic_vector(7 downto 0); Clock: in std_logic; 
         WE: in std_logic; ClockEn: in std_logic; 
         Q : out std_logic_vector(7 downto 0)
     );
     end component;
 
-    signal Address : std_logic_vector(5 downto 0) := (others => '0');
+    signal Address : std_logic_vector(4 downto 0) := (others => '0');
     signal Data : std_logic_vector(7 downto 0) := (others => '0');
     signal Clock: std_logic := '0';
     signal WE: std_logic := '0';
@@ -39,7 +39,7 @@ begin
       Address <= (others => '0') ;
       wait for 100 ns;
       wait for 10 ns;
-      for i in 0 to 134 loop
+      for i in 0 to 70 loop
         wait until Clock'event and Clock = '1';
         Address <= Address + '1' after 1 ns;
       end loop;
@@ -52,7 +52,7 @@ begin
       Data <= (others => '0') ;
       wait for 100 ns;
       wait for 10 ns;
-      for i in 0 to 67 loop
+      for i in 0 to 35 loop
         wait until Clock'event and Clock = '1';
         Data <= Data + '1' after 1 ns;
       end loop;
@@ -66,7 +66,7 @@ begin
     begin
       WE <= '0' ;
       wait for 10 ns;
-      for i in 0 to 67 loop
+      for i in 0 to 35 loop
         wait until Clock'event and Clock = '1';
         WE <= '1' after 1 ns;
       end loop;

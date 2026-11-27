@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<DiamondModule name="RAM" module="Distributed_SPRAM" VendorName="Lattice Semiconductor Corporation" generator="IPexpress" date="2026 11 27 14:30:29.615" version="3.9" type="Module" synthesis="synplify" source_format="VHDL">
+<DiamondModule name="RAM" module="RAM" VendorName="Lattice Semiconductor Corporation" generator="IPexpress" date="2026 11 27 16:54:17.401" version="3.9" type="Module" synthesis="synplify" source_format="VHDL">
   <Package>
-		<File name="" type="" modified="2026 11 27 14:30:29.615"/>
-		<File name="RAM.lpc" type="lpc" modified="2026 11 27 14:30:27.945"/>
-		<File name="RAM.vhd" type="top_level_vhdl" modified="2026 11 27 14:30:27.992"/>
-		<File name="RAM_tmpl.vhd" type="template_vhdl" modified="2026 11 27 14:30:27.992"/>
-		<File name="tb_RAM_tmpl.vhd" type="testbench_vhdl" modified="2026 11 27 14:30:27.992"/>
+		<File name="" type="" modified="2026 11 27 16:54:17.152"/>
+		<File name="RAM.lpc" type="lpc" modified="2026 11 27 16:54:15.451"/>
+		<File name="RAM.vhd" type="top_level_vhdl" modified="2026 11 27 16:54:15.514"/>
+		<File name="RAM_tmpl.vhd" type="template_vhdl" modified="2026 11 27 16:54:15.514"/>
+		<File name="tb_RAM_tmpl.vhd" type="testbench_vhdl" modified="2026 11 27 16:54:15.529"/>
   </Package>
 </DiamondModule>

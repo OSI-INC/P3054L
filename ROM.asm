@@ -24,7 +24,24 @@ const mmu_x4cfg 0x0215 ; X4 Configuration (Write)
 const mmu_saddr 0x0216 ; Sample Memory Addr (Write)
 const mmu_sacc  0x0217 ; Sample Accumulator Control (Write/Strobe)
 
+; Regiser locations.
+const reg_B     0x0100 
+const reg_C     0x0101
+const reg_D     0x0102
+const reg_E     0x0103
+const reg_H     0x0104
+const reg_L     0x0105
+
+; Boot and interrupt vectors.
+jp main
+jp main
+
+; Include files.
+include "I2C.asm"
+
 main:
+
+main_loop:
 
 ; Check the Telemetry Dispatch bit.
 check_dispatch:
@@ -61,10 +78,10 @@ ld (mmu_sacc),A
 ld A,(1)
 ld (mmu_irst),A
 
+; Check for incoming commmand.
 check_cmd:
-
 
 
 jp main
 
-;include "I2C.asm"
+
