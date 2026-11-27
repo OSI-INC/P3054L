@@ -188,7 +188,8 @@ architecture behavior of main is
 	constant mmu_ctrl_top  : natural := 16#02FF#;
 	constant mmu_cmd_bot   : natural := 16#0300#;
 	constant mmu_cmd_top   : natural := 16#03FF#;
-	constant mmu_ralen : positive := 5; -- Register Address Length
+	constant mmu_ctrl_addr_len : positive := 5; -- Register Address Length
+	constant mmu_ram_addr_len : positive := 6; -- Process RAM Address Length
 	
 -- Register Locations. We specify the offset from the start of the control
 -- space. When a location is a control register shadowed in RAM, we say it 
@@ -225,7 +226,7 @@ architecture behavior of main is
 	subtype mcu_instr_type is std_logic_vector(mcu_instr_len-1 downto 0);
 	signal prog_cntr, mcu_addr : mcu_addr_type;
 	signal prog_data : mcu_instr_type;
-	signal mcu_data_out, mcu_data_in : byte_type;
+	signal mcu_data_out, mcu_data_in, ram_data : byte_type;
 	signal WDS, CKEN : boolean;
 	signal RAMWR : std_logic;
 	signal df_reg : nibble_type;
@@ -252,7 +253,10 @@ architecture behavior of main is
 	attribute nomerge of TXI, TXA : signal is "";  
 	constant max_chan_num : positive := 255;
 	signal td_chan : natural range 0 to max_chan_num;
-		
+
+-- I2C Bus Controller
+	signal i2c_in : std_logic_vector(7 downto 0); -- I2C Serial Byte
+
 -- Byte Receiver
 	signal RPS, -- Radio Frequency Power Synchronized
 		ICMD, -- Initiate Command Reception
@@ -345,7 +349,8 @@ begin
 		);
 		
 -- The Transmit Clock is FCK divided by two, clocked on the
--- falling edge of FCK.
+-- falling edge of FCK. The use of the falling edge is essential
+-- to both the Message Transmitter and the Microcontroller.
 	Transmit_Clock : process (all) is
 	begin
 		if falling_edge(FCK) then
@@ -630,8 +635,14 @@ begin
 		NADC4 <= to_std_logic(not (ADCCS and (tm_addr = x4_addr)));
 	end process;
 
--- The microcontroller instruction memory
-	Instruction_Memory : entity ROM
+-- Microcontroller Instruction Memory. This is a read-only memory
+-- that holds the program instructions. The instructions are not
+-- bytes, but rather a concatination of a five-bit opcode and an
+-- address. With a ten-bit address, the instructions are fifteen
+-- bits wide and the instruction memory contains 1024 instructions.
+-- The instruction memory must run on the falling edge of the MCU
+-- clock.
+	Instruction_ROM : entity ROM
 		port map (
 			Address => prog_cntr(8 downto 0),
 			OutClock => not TCK,
@@ -639,9 +650,28 @@ begin
 			Reset => '0',
 			Q => prog_data
 		);
-		
--- The Reduced Instruction Set Microcontroller (RMC5).
-	Microcontroller : entity RMC5_MCU
+-- Microcontroller Process Random-Access Memmory (RAM). This is a-- single-port RAM built in LUTs. It is asynchronous on reads, 
+-- which is a requirement of the RCM5 microcontroller. We write on
+-- the rising edge of TCK.
+	Process_RAM : entity RAM
+		port map (
+			Address => mcu_addr(mmu_ram_addr_len-1 downto 0),
+			Clock => TCK,
+			ClockEn => '1',
+			WE => RAMWR,
+			Data => mcu_data_out,
+			Q => ram_data
+		);
+	
+-- Reduced Instruction Set Microcontroller, Five-Bit Opcodes (RMC5).
+-- We instantiate an RMC5, but we don't use all its port signals, and
+-- so obtain some reduction in its size. We do not drive its Interrupt
+-- Request (IRQ) or Clock Enable (CKEN) inputs. We do not use its 
+-- Interrupt Service (ISRV) or Read Data Strobe (RDS) outputs. The
+-- MCU runs of the Transmit Clock (TCK), which is half the Fast Clock
+-- (FCK). Because TCK runs off the falling edges of FCK, a TCK rising
+-- edge will occur just after an FCK falling edge.
+	Manager_MCU : entity RMC5_MCU
 		generic map (
 			addr_len => mcu_addr_len,
 			sp_len => mcu_sp_len
@@ -659,16 +689,16 @@ begin
 			CKEN => true
 		);
 	
--- The Memory Management Unit (MMU)
+-- Memory Management Unit (MMU) for the Microcontroller.
 	MMU : process (all) is 
 		variable full_addr : natural range 0 to (2**mcu_addr_len)-1;
-		variable low_addr : natural range 0 to (2**mmu_ralen)-1;
+		variable low_addr : natural range 0 to (2**mmu_ctrl_addr_len)-1;
 
 	begin
 		-- These signals develop after the CPU asserts a new address. 
 		-- They will be ready before the falling edge of the CK.
 		full_addr := to_integer(unsigned(mcu_addr));
-		low_addr := to_integer(unsigned(mcu_addr(mmu_ralen-1 downto 0)));
+		low_addr := to_integer(unsigned(mcu_addr(mmu_ctrl_addr_len-1 downto 0)));
 		
 		-- By default, don't write to RAM.
 		RAMWR <= '0';
@@ -681,7 +711,7 @@ begin
 			mcu_data_in <= mcu_addr(7 downto 0);
 		when mmu_ram_bot to mmu_ram_top =>
 			if not WDS then
-				mcu_data_in <= x"FF";
+				mcu_data_in <= ram_data;
 			else
 				RAMWR <= to_std_logic(WDS);
 			end if;
@@ -690,6 +720,8 @@ begin
 				case low_addr is
 				when mmu_irqb =>
 					mcu_data_in(0) <= to_std_logic(TDRQ xor TDACK);
+				when mmu_i2cMR => 
+					mcu_data_in <= i2c_in;
 				when others =>
 					null;
 				end case;
@@ -735,6 +767,44 @@ begin
 					TDRSTACC <= mcu_data_out(0);					
 					TDWRSM <= mcu_data_out(1);
 					TDBSY <= (mcu_data_out(2) = '1');
+					
+				-- The I2C bit-banging interface. Each write to one of these
+				-- locations sets both SDA and SCL to one of zero, one, or
+				-- high-impedance. We operate the I2C by writing register A
+				-- to these locations. Some locations take the top bit of A
+				-- and, when this bit is zero, drive SDA low. Others cause
+				-- the value of SDA to be shifted into the i2C byte register,
+				-- from which it can later be read out. With the CPU in boost
+				-- mode, the interface runs at 500 kHz. See the I2C assembler
+				-- routine for more details.
+				when mmu_i2c00 => 
+					SDA <= '0';
+					SCL <= '0';
+				when mmu_i2c01 =>
+					SDA <= '0';
+					SCL <= '1';
+				when mmu_i2cA0 => 
+					if (mcu_data_out(7) = '0') then
+						SDA <= '0';
+					else
+						SDA <= 'Z';
+					end if;
+					SCL <= '0';
+				when mmu_i2cA1 =>
+					if (mcu_data_out(7) = '0') then
+						SDA <= '0';
+					else
+						SDA <= 'Z';
+					end if;
+					SCL <= '1';
+				when mmu_i2cZ0 => 
+					SDA <= 'Z';
+					SCL <= '0';
+				when mmu_i2cZ1 => 
+					SDA <= 'Z';
+					SCL <= '1';
+					i2c_in(7 downto 1) <= i2c_in(6 downto 0);
+					i2c_in(0) <= SDA;
 				when others => null;
 				end case;
 			end if;
