@@ -26,45 +26,44 @@ const mmu_sacc  0x0217 ; Sample Accumulator Control (Write/Strobe)
 
 main:
 
+; Check the Telemetry Dispatch bit.
+check_dispatch:
 ld A,(mmu_irqb)
-and A,(1)
-jp z,main
+and A,(0x01)
+jp z,check_cmd
 
-; Select sample memory location one.
-ld A,(1)
+; Select sample memory location zero, take
+; control of the sample memory and initiate
+; transmission on channel one.
+ld A,(0)
 ld (mmu_saddr),A
-
-; Take control of sample memory.
 ld A,(4)
 ld (mmu_sacc),A
-
-; Initiate transmission on channel one.
 ld A,(1)
 ld (mmu_xch),A
 
 ; Wait for transmission to complete.
-ld A,(13)
-
+ld A,(20)
 tx_wait:
-
 sub A,(1)
 jp nz,tx_wait
 
-; Reset sample accumulator.
+; Reset sample accumulator, write zero to the
+; sample memory, and return sample memory to
+; the Telemetry Manager. Acknowledge the dispatch
+; request.
 ld A,(5)
 ld (mmu_sacc),A
-
-; Write zero to sample memory.
 ld A,(6)
 ld (mmu_sacc),A
-
-; Return sample memory to Telemetry Manager.
 ld A,(0)
 ld (mmu_sacc),A
-
-; Acknowledge dispatch request.
 ld A,(1)
 ld (mmu_irst),A
+
+check_cmd:
+
+
 
 jp main
 

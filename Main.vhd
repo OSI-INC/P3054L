@@ -1257,5 +1257,5 @@ begin
 		CPA <= (state /= idle_s);
 	end process;
 	
-	TP <= df_reg(0);
+	TP <= to_std_logic(TDBSY);
 end behavior;
