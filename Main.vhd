@@ -46,7 +46,14 @@
 -- V2.7 [27-NOV-26] Add RMC5 processor, MMU, and implement program
 -- that toggles TP. Working, size is 620 LUTs.
 
--- V2.8 [27-NOV-26] 
+-- V2.8 [27-NOV-26] Delete Telemetry Dispatcher and replace with 
+-- microcontroller Software Dispatcher. Add 32-Byte RAM. Have one
+-- EBR working as instruction memory. Transmission working, size is
+-- 635 LUTs, 2 EBR. All connections needed for I2C and sample 
+-- shift into sample memory are in place. Command interpreter still 
+-- in LUTs, no run timer implemented.
+
+
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -264,7 +271,7 @@ architecture behavior of main is
 		CBS -- Command Bit Strobe (CBS)
 		: boolean := false; 
 	
--- Command Memory
+-- Command Processor
 	subtype cmd_data_type is std_logic_vector(7 downto 0);
 	signal cmd_in : cmd_data_type; -- Command Memory Data In
 	signal cmd_out : cmd_data_type; -- Command Memory Data Out
@@ -274,12 +281,10 @@ architecture behavior of main is
 		CMWR,  -- Command Memory Write
 		CMRD -- Command Memory Read
 		: std_logic; 
-
--- Command Processor
-	signal CPRCV, -- Command Processor Receiving
-		CPA -- Command Processor Active
+	signal CMDRQ, -- Command Processor Request 
+		CMDACK, -- Command Processor Acknowledge
+		CMDRCV -- Command Processor Receiving
 		: boolean := false;
-	signal target_id_hi : std_logic_vector(7 downto 0);
 		
 -- Functions and Procedures	
 	function to_std_logic (v: boolean) return std_ulogic is
@@ -331,7 +336,7 @@ begin
 -- calibrated so that it produces FCK of 10 MHz. The Fast Clock is
 -- enabled whenever the request and acknowledgment signals of one of
 -- our acquisition or dispatch processes are not equal.
-	FCKEN <= (ADCRQ xor ADCACK) or (TDRQ xor TDACK);
+	FCKEN <= (ADCRQ xor ADCACK) or (TDRQ xor TDACK) or (CMDRQ xor CMDACK);
 	Fast_Clock : entity ring_oscillator 
 		generic map (
 			num_gates => fck_num_gates,
@@ -711,8 +716,13 @@ begin
 			RAMWR <= to_std_logic(WDS);
 		when mmu_ctrl_bot to mmu_ctrl_top =>
 			case low_addr is
+			when mmu_sr =>
+				mcu_data_in(6) <= CME;
 			when mmu_irqb =>
 				mcu_data_in(0) <= to_std_logic(TDRQ xor TDACK);
+				mcu_data_in(1) <= to_std_logic(CMDRQ xor CMDACK);
+			when mmu_cmp =>
+				mcu_data_in <= cmd_out;
 			when mmu_i2cMR => 
 				mcu_data_in <= i2c_in;
 			when others =>
@@ -736,58 +746,69 @@ begin
 			TDBSY <= false;
 			TDWRSM <= '0';
 			TDRSTACC <= '0';
+			CMDACK <= false;
+			CMRD <= '0';
 		elsif rising_edge(TCK) then
 			SWRST <= false;
 			TXI <= false;
 			TDWRSM <= '0';
 			TDRSTACC <= '0';
-			if WDS and (full_addr >= mmu_ctrl_bot) and (full_addr <= mmu_ctrl_top) then
-				case low_addr is
-				when mmu_irst =>
-					if (mcu_data_out(0) = '1') then
-						TDACK <= TDRQ;
-					end if;
-				when mmu_dfr => 
-					df_reg <= mcu_data_out(3 downto 0);
-				when mmu_xch =>
-					td_chan <= to_integer(unsigned(mcu_data_out));
-					TXI <= true;
-				when mmu_saddr =>
-					sd_addr <= mcu_data_out(smem_addr_len-1 downto 0);
-				when mmu_sacc =>
-					TDRSTACC <= mcu_data_out(0);					
-					TDWRSM <= mcu_data_out(1);
-					TDBSY <= (mcu_data_out(2) = '1');
-				when mmu_i2c00 => 
-					SDA <= '0';
-					SCL <= '0';
-				when mmu_i2c01 =>
-					SDA <= '0';
-					SCL <= '1';
-				when mmu_i2cA0 => 
-					if (mcu_data_out(7) = '0') then
+			CMRD <= '0';
+			if (full_addr >= mmu_ctrl_bot) and (full_addr <= mmu_ctrl_top) then
+				if WDS then
+					case low_addr is
+					when mmu_irst =>
+						if (mcu_data_out(0) = '1') then
+							TDACK <= TDRQ;
+						end if;
+						if (mcu_data_out(1) = '1') then
+							CMDACK <= CMDRQ;
+						end if;
+					when mmu_dfr => 
+						df_reg <= mcu_data_out(3 downto 0);
+					when mmu_cmp => 
+						CMRD <= '1';
+					when mmu_xch =>
+						td_chan <= to_integer(unsigned(mcu_data_out));
+						TXI <= true;
+					when mmu_saddr =>
+						sd_addr <= mcu_data_out(smem_addr_len-1 downto 0);
+					when mmu_sacc =>
+						TDRSTACC <= mcu_data_out(0);					
+						TDWRSM <= mcu_data_out(1);
+						TDBSY <= (mcu_data_out(2) = '1');
+					when mmu_i2c00 => 
 						SDA <= '0';
-					else
-						SDA <= 'Z';
-					end if;
-					SCL <= '0';
-				when mmu_i2cA1 =>
-					if (mcu_data_out(7) = '0') then
+						SCL <= '0';
+					when mmu_i2c01 =>
 						SDA <= '0';
-					else
+						SCL <= '1';
+					when mmu_i2cA0 => 
+						if (mcu_data_out(7) = '0') then
+							SDA <= '0';
+						else
+							SDA <= 'Z';
+						end if;
+						SCL <= '0';
+					when mmu_i2cA1 =>
+						if (mcu_data_out(7) = '0') then
+							SDA <= '0';
+						else
+							SDA <= 'Z';
+						end if;
+						SCL <= '1';
+					when mmu_i2cZ0 => 
 						SDA <= 'Z';
-					end if;
-					SCL <= '1';
-				when mmu_i2cZ0 => 
-					SDA <= 'Z';
-					SCL <= '0';
-				when mmu_i2cZ1 => 
-					SDA <= 'Z';
-					SCL <= '1';
-					i2c_in(7 downto 1) <= i2c_in(6 downto 0);
-					i2c_in(0) <= SDA;
-				when others => null;
-				end case;
+						SCL <= '0';
+					when mmu_i2cZ1 => 
+						SDA <= 'Z';
+						SCL <= '1';
+						i2c_in(7 downto 1) <= i2c_in(6 downto 0);
+						i2c_in(0) <= SDA;
+					when others => 
+						null;
+					end case;
+				end if;
 			end if;
 		end if;
 	end process;
@@ -888,7 +909,7 @@ begin
 
 -- With XEN we enable the VCO. We assert XEN while Transmit Active (TXA) or 
 -- Transmit Warm-Up (TXWP), but only if not Command Processor Receive (CPRCV).
-	XEN <= to_std_logic((not CPRCV) and (TXA or TXWP));
+	XEN <= to_std_logic((not CMDRCV) and (TXA or TXWP));
 			
 -- The Frequency Modulation process takes the transmit bit values provided by
 -- the Message Transmitter, turns them into a sequence of rising and falling
@@ -1148,7 +1169,7 @@ begin
 		WrClock => RCK,
 		WrEn => CMWR,
 		Data => cmd_in,
-		RdClock => not RCK,
+		RdClock => TCK,
 		RdEn => CMRD,
 		AlmostEmpty => CME,
 		Full => CMF,
@@ -1166,30 +1187,25 @@ begin
 		constant store_cmd_s : natural := 2;
 		constant check_full_s : natural := 3;
 		constant check_cmd_s : natural := 4;
-		constant read_id_hi_s : natural := 5;
-		constant check_id_s : natural := 6;
-		constant check_empty_s : natural := 7;
-		constant interpret_opcode_s : natural := 8;
-		constant set_fck_mask_s : natural := 9;
+		constant complete_s : natural := 5;
 		
 		-- Variables and constants for the Command Processor
-		variable state, next_state : natural range 0 to 15;
+		variable state, next_state : natural range 0 to 5;
 		
 	begin
-		-- We reset to the idle state on global RESET.
+		-- Reset to the idle state on global RESET.
 		if (RESET = '1') then
 			state := idle_s;
 			CMRST <= '1';
-			fck_mask <= default_fck_mask;
+			CMDRQ <= false;
 			
-		-- The Command Processor state machine runs off RCK, which allows it to
-		-- work with the Byte Receiver.
+		-- The Command Processor state machine runs off RCK, which allows 
+		-- it to work with the Byte Receiver.
 		elsif rising_edge(RCK) then
 			next_state := idle_s;
 			CMRST <= '0';
 			RBI <= false;
 			CMWR <= '0';
-			CMRD <= '0';
 		
 			-- Idle State.
 			if (state = idle_s) then
@@ -1246,67 +1262,28 @@ begin
 				if CRCERR or (CME = '1') then 
 					next_state := idle_s;
 				else 
-					next_state := read_id_hi_s;
+					next_state := complete_s;
+					CMDRQ <= not CMDRQ;
 				end if;
-				CMRD <= '1';
 			end if;
 
-			-- The first byte out of the FIFO is the top byte of the target device
-			-- identifier. Save this so we can combine it with the low byte in the
-			-- next step. Clock the next byte out of the FIFO.
-			if (state = read_id_hi_s) then
-				next_state := check_id_s;
-				target_id_hi <= cmd_out;
-				CMRD <= '1';
-			end if;	
-			
-			-- Compare the target identifier with this device's identifier
-			-- and the wildcard. If it matches either, we will proceed to
-			-- decode the command. Otherwise, we return to the idle state.
-			if (state = check_id_s) then
-				if (target_id_hi & cmd_out) = device_id then
-					next_state := check_empty_s;
-				elsif (target_id_hi & cmd_out) = wildcard_id then
-					next_state := check_empty_s;
+			-- We have a completed command in memory, waiting for the CPU to read it out.
+			-- We assert CMDRDY and wait until the CPU asserts CPRST. The command processor
+			-- will ignore any further command transmission.
+			if (state = complete_s) then
+				if (CMDRQ xor CMDACK) then
+					next_state := complete_s;
 				else
 					next_state := idle_s;
 				end if;
-				CMRD <= '1';
-			end if;
-			
-			-- If the command FIFO is empty, we are done, so go back to idle.
-			if (state = check_empty_s) then
-				if (CME = '1') then
-					next_state := idle_s;
-				else 
-					next_state := interpret_opcode_s;
-				end if;
-			end if;
-			
-			-- Interpret the opcode at the output of the command memory. At the 
-			-- same time, bring the next byte to the output of the memory.
-			if (state = interpret_opcode_s) then
-				CMRD <= '1';
-				case to_integer(unsigned(cmd_out)) is 
-					when 65 => next_state := set_fck_mask_s;
-					when others => next_state := idle_s;
-				end case;
-			end if;
-			
-			-- Set the fck_mask.
-			if (state = set_fck_mask_s) then
-				CMRD <= '1';
-				fck_mask <= cmd_out;
-				next_state := check_empty_s;
 			end if;
 
 			-- Advance the state variable.
 			state := next_state;
 		end if;
 		
-		CPRCV <= (state > idle_s) and (state < check_cmd_s);
-		CPA <= (state /= idle_s);
+		CMDRCV <= (state > idle_s) and (state < complete_s);
 	end process;
 	
-	TP <= to_std_logic(TDBSY);
+	TP <= to_std_logic(CMDRQ);
 end behavior;
