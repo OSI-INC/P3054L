@@ -43,6 +43,8 @@
 -- from 378 to 495 LUTs. Decide to abandon LUT-based I2C Master and
 -- Sensor Reader and instead try using the RCM5.
 
+-- V2.7 [26-NOV-26] Add RMC5 processor.
+
 
 library ieee;  
 use ieee.std_logic_1164.all;
@@ -100,20 +102,20 @@ entity main is
 	constant x3_addr : smem_addr_type := "0010";
 	constant x4_addr : smem_addr_type := "0011";
 	constant tp_addr : smem_addr_type := "0100";
-	constant x1_pd : natural := 1;
-	constant x2_pd : natural := 2;
-	constant x3_pd : natural := 4;
-	constant x4_pd : natural := 8;
-	constant tp_pd : natural := 16;
-	constant x1_shift : natural := 4;
-	constant x2_shift : natural := 3;
-	constant x3_shift : natural := 2;
-	constant x4_shift : natural := 1;
-	constant x1_chan : natural := 1;
-	constant x2_chan : natural := 3;
-	constant x3_chan : natural := 5;
-	constant x4_chan : natural := 7;	
-	constant tp_chan : natural := 9;
+	constant x1_pd : natural range 0 to 16 := 1;
+	constant x2_pd : natural range 0 to 16 := 2;
+	constant x3_pd : natural range 0 to 16 := 4;
+	constant x4_pd : natural range 0 to 16 := 8;
+	constant tp_pd : natural range 0 to 16 := 16;
+	constant x1_shift : natural range 0 to 7 := 4;
+	constant x2_shift : natural range 0 to 7 := 3;
+	constant x3_shift : natural range 0 to 7 := 2;
+	constant x4_shift : natural range 0 to 7 := 1;
+	constant x1_chan : natural range 0 to 255 := 1;
+	constant x2_chan : natural range 0 to 255 := 3;
+	constant x3_chan : natural range 0 to 255 := 5;
+	constant x4_chan : natural range 0 to 255 := 7;	
+	constant tp_chan : natural range 0 to 255 := 9;
 end;
 
 architecture behavior of main is
@@ -167,27 +169,22 @@ architecture behavior of main is
 		ADCBIT, -- ADC Bit for Sample Data
 		ADCADD -- ADC Reader Requests Addition
 		: std_logic;
-		
--- Sensor Reader
-	signal SI2CRQ, -- Sensor I2C Request
-		SI2CACK, -- Sensor I2C Acknowledge
-		SRRQ, -- Sensor Reader Request
-		SRACK, -- Sensor Reader Acknowledge
-		SRSHSD, -- Sensor Reader Shift Sample Data
-		SI2CEN, -- Sensor I2C Clock Enable
-		SI2CWR -- Sensor I2C Data Write
-		: boolean := false;
-	signal SRWRSM, -- Sample Reader Write to Sample Memory
-		SRBIT, -- Sample Reader Bit for Sample Data
-		SRADD -- Sample Reader Requests Addition
-		: std_logic;
-	signal sr_data, si2c_data : std_logic_vector(7 downto 0);
-	signal si2c_op : std_logic_vector(2 downto 0);
-	constant op_start   : std_logic_vector(2 downto 0) := "001";
-	constant op_stop    : std_logic_vector(2 downto 0) := "010";
-	constant op_read    : std_logic_vector(2 downto 0) := "100";
-	constant op_readend : std_logic_vector(2 downto 0) := "101";
-	constant op_write   : std_logic_vector(2 downto 0) := "110";	
+
+-- Microcontroller
+	constant addr_len : positive := 9;
+	constant stack_len : positive := 4;
+	constant opcode_len : positive := 5;
+	constant instr_len : positive := addr_len + opcode_len;
+	subtype mcu_addr_type is std_logic_vector(addr_len-1 downto 0);
+	subtype mcu_instr_type is std_logic_vector(instr_len-1 downto 0);
+	signal prog_cntr, mcu_addr : mcu_addr_type;
+	signal prog_data : mcu_instr_type;
+	signal mcu_data_out, mcu_data_in : byte_type;
+	signal WDS, RDS, IRQ, ISRV, CKEN : boolean;
+	signal CK : std_logic;
+
+-- MCU Registers
+	signal df_reg : byte_type;
 	
 -- Telemetry Dispatcher.
 	signal TDWRSM, -- Telemetry Dispatcher Write to Sample Memory
@@ -242,10 +239,7 @@ architecture behavior of main is
 		CPA -- Command Processor Active
 		: boolean := false;
 	signal target_id_hi : std_logic_vector(7 downto 0);
-	
--- I2C Masters
-	signal tm_i2c_data : std_logic_vector(7 downto 0);
-	
+		
 -- Functions and Procedures	
 	function to_std_logic (v: boolean) return std_ulogic is
 	begin if v then return('1'); else return('0'); end if; end function;
@@ -296,7 +290,7 @@ begin
 -- calibrated so that it produces FCK of 10 MHz. The Fast Clock is
 -- enabled whenever the request and acknowledgment signals of one of
 -- our acquisition or dispatch processes are not equal.
-	FCKEN <= (ADCRQ xor ADCACK) or (TDRQ xor TDACK) or (SRRQ xor SRACK);
+	FCKEN <= (ADCRQ xor ADCACK) or (TDRQ xor TDACK);
 	Fast_Clock : entity ring_oscillator 
 		generic map (
 			num_gates => fck_num_gates,
@@ -367,7 +361,6 @@ begin
 			ADCRQ <= false;
 			ADCCAL <= true;
 			TDRQ <= false;
-			SRRQ <= false;
 			MCK <= '0';
 			state := 0;
 			adc_shift <= 0;
@@ -401,8 +394,6 @@ begin
 						ADCRQ <= not ADCRQ;
 					end if;
 				elsif (state = 6) then
-					tm_addr <= tp_addr;
-					SRRQ <= not SRRQ;
 					ADCCAL <= false;
 				elsif (state = to_integer(unsigned(transmit_shift))+16) then
 					TDRQ <= not TDRQ;
@@ -427,7 +418,7 @@ begin
 	Sample_Memory : entity SMRAM port map (
 		Clock => not FCK,
 		ClockEn => '1',
- 		WE => ADCWRSM or TDWRSM or SRWRSM,
+ 		WE => ADCWRSM or TDWRSM,
 		Address => smem_addr, 
 		Data => acc_data,
 		Q => smem_data);
@@ -440,11 +431,10 @@ begin
 		if RESET = '1' then
 			sample_data <= (others => '0');
 		elsif falling_edge(FCK) then
-			if ADCSHSD or SRSHSD then
+			if ADCSHSD then
 				sample_data(17 downto 1) <= sample_data(16 downto 0);
 				sample_data(0) <=
-					(ADCBIT and to_std_logic(ADCSHSD))
-					or (SRBIT and to_std_logic(SRSHSD));
+					(ADCBIT and to_std_logic(ADCSHSD));
 			end if;
 		end if;
 	end process;	
@@ -468,7 +458,7 @@ begin
 		DataB => smem_data,
 		Result => acc_data,
 		Clock => not FCK,
-		ClockEn => ADCADD or SRADD,
+		ClockEn => ADCADD,
 		Reset => TDRSTACC
 	);
 
@@ -598,225 +588,48 @@ begin
 		NADC4 <= to_std_logic(not (ADCCS and (tm_addr = x4_addr)));
 	end process;
 
--- The Sensor I2C is the I2C bus master we use to read the thermometer
--- and accelerometer.
-	Sensor_I2C : entity i2c_master port map (
-		RESET => RESET,
-		opcode => si2c_op,
-		I2CRQ => SI2CRQ,
-		I2CACK => SI2CACK,
-		data_out => sr_data,
-		data_in => si2c_data,
-		DATAWR => SI2CWR,
-		SCL => SCL,
-		SDA => SDA,
-		CK => FCK,
-		CKEN => SI2CEN
-	);	
+-- The microcontroller instruction memory
+	Instruction_Memory : entity ROM
+		port map (
+			Address => prog_cntr,
+			OutClock => not CK,
+			OutClockEn => '1',
+			Reset => '0',
+			Q => prog_data
+		);
+		
+-- The Reduced Instruction Set Microctontroller (RMC5).
+	Microcontroller : entity RMC5_MCU
+		generic map (
+			addr_len => 9,
+			sp_len => 4
+		)
+		port map (
+			prog_cntr => prog_cntr,
+			prog_data => prog_data,
+			mcu_data_out => mcu_data_out,
+			mcu_data_in => mcu_data_in,
+			mcu_addr => mcu_addr,
+			WDS => WDS,
+			RDS => RDS,
+			IRQ => IRQ,
+			ISRV => ISRV,
+			RESET => RESET,
+			CK => FCK,
+			CKEN => true
+		);
+		
+-- The Memory Management Unit (MMU)
+	MMU : process (all) is 
 	
--- The Sensor Reader uses the Sensor I2C to read the accelerometer
--- and thermometer. It runs off the falling edge of FCK.
-	Sensor_Reader : process (all) is
-		variable state, next_state : natural range 0 to 31;
-		variable return_state : natural range 0 to 31;
-		variable count : natural range 0 to 4;
-		variable bit_idx : natural range 0 to 7;
-
-		constant sr_idle  : natural := 0;
-		constant sr_start : natural := 1;
-		constant sr_devw  : natural := 2;
-		constant sr_reg   : natural := 3;
-		constant sr_rstart : natural := 4;
-		constant sr_devr  : natural := 5;
-		constant sr_readhi : natural := 6;
-		constant sr_zeros : natural := 7;
-		constant sr_shhi  : natural := 8;
-		constant sr_readlo : natural := 9;
-		constant sr_shlo  : natural := 10;
-		constant sr_stop  : natural := 11;
-		constant sr_add   : natural := 12;
-		constant sr_write : natural := 13;
-		constant sr_done  : natural := 14;
-		constant sr_req   : natural := 15;
-		constant sr_wait  : natural := 16;
-
 	begin
-		if RESET = '1' then
-			state := sr_idle;
-			return_state := sr_idle;
-			count := 0;
-			bit_idx := 0;
-			SI2CEN <= false;
-			SI2CRQ <= false;
-			SI2CWR <= false;
-			SRACK <= false;
-			SRSHSD <= false;
-			SRBIT <= '0';
-			SRADD <= '0';
-			SRWRSM <= '0';
-			si2c_op <= op_stop;
-			si2c_data <= (others => '0');
-
-		elsif falling_edge(FCK) then
-
-			-- Default values for single-clock strobes.
-			SI2CWR <= false;
-			SRSHSD <= false;
-			SRADD <= '0';
-			SRWRSM <= '0';
-
-			if (SRRQ xor SRACK) then
-
-				next_state := state;
-
-				case state is
-
-					when sr_idle =>
-						next_state := sr_start;
-
-					-- Generate the start condition.
-					when sr_start =>
-						si2c_op <= op_start;
-						return_state := sr_devw;
-						next_state := sr_req;
-
-					-- Select the temperature sensor for writing.
-					when sr_devw =>
-						si2c_op <= op_write;
-						si2c_data <= x"92";
-						SI2CWR <= true;
-						return_state := sr_reg;
-						next_state := sr_req;
-
-					-- Select the temperature result register.
-					when sr_reg =>
-						si2c_op <= op_write;
-						si2c_data <= x"00";
-						SI2CWR <= true;
-						return_state := sr_rstart;
-						next_state := sr_req;
-
-					-- Generate a repeated start condition.
-					when sr_rstart =>
-						si2c_op <= op_start;
-						return_state := sr_devr;
-						next_state := sr_req;
-
-					-- Select the temperature sensor for reading.
-					when sr_devr =>
-						si2c_op <= op_write;
-						si2c_data <= x"93";
-						SI2CWR <= true;
-						return_state := sr_readhi;
-						next_state := sr_req;
-
-					-- Read the high byte and acknowledge.
-					when sr_readhi =>
-						si2c_op <= op_read;
-						return_state := sr_zeros;
-						bit_idx := 3;
-						next_state := sr_req;
-
-					-- Shift four leading zeros into sample_data.
-					when sr_zeros =>
-						SRBIT <= '0';
-						SRSHSD <= true;
-						if (bit_idx = 0) then
-							bit_idx := 7;
-							next_state := sr_shhi;
-						else
-							bit_idx := bit_idx - 1;
-						end if;
-
-					-- Shift the high byte into sample_data,
-					-- inverting the sign bit.
-					when sr_shhi =>
-						SRBIT <= sr_data(bit_idx);
-						if (bit_idx = 7) then
-							SRBIT <= not sr_data(7);
-						end if;
-						SRSHSD <= true;
-						if (bit_idx = 0) then
-							next_state := sr_readlo;
-						else
-							bit_idx := bit_idx - 1;
-						end if;
-
-					-- Read the low byte without acknowledging.
-					when sr_readlo =>
-						si2c_op <= op_readend;
-						return_state := sr_shlo;
-						bit_idx := 7;
-						next_state := sr_req;
-
-					-- Shift the six most significant bits of
-					-- the low byte into sample_data.
-					when sr_shlo =>
-						SRBIT <= sr_data(bit_idx);
-						SRSHSD <= true;
-						if (bit_idx = 2) then
-							next_state := sr_stop;
-						else
-							bit_idx := bit_idx - 1;
-						end if;
-
-					-- Generate the stop condition.
-					when sr_stop =>
-						si2c_op <= op_stop;
-						return_state := sr_add;
-						next_state := sr_req;
-
-					-- Accumulate the new sample.
-					when sr_add =>
-						SRADD <= '1';
-						next_state := sr_write;
-
-					-- Write the accumulator result to memory.
-					when sr_write =>
-						SRWRSM <= '1';
-						next_state := sr_done;
-
-					-- The memory write takes place on this edge.
-					when sr_done =>
-						SRACK <= SRRQ;
-						next_state := sr_idle;
-
-					-- Initiate an I2C operation. Any outgoing
-					-- byte is loaded into the I2C master on
-					-- this edge, before the request takes effect.
-					when sr_req =>
-						SI2CRQ <= not SI2CRQ;
-						next_state := sr_wait;
-
-					-- Wait for completion of the I2C operation.
-					when sr_wait =>
-						if (SI2CRQ = SI2CACK) then
-							next_state := return_state;
-						end if;
-
-					when others =>
-						next_state := sr_idle;
-
-				end case;
-
-			else
-				next_state := sr_idle;
+		if rising_edge(FCK) then
+			if (mcu_addr = "000000000") then
+				df_reg <= mcu_data_out;
 			end if;
-
-			state := next_state;
-
-			-- Enable the I2C master once every five FCK periods.
-			if (count = 0) then
-				count := 4;
-				SI2CEN <= true;
-			else
-				count := count - 1;
-				SI2CEN <= false;
-			end if;
-
 		end if;
 	end process;
-
+		
 -- The Telemetry Dispatcher runs off the falling edge of FCK. It
 -- arranges for transmission of values stored in the sample memory.
 	Telemetry_Dispatcher : process (all) is
@@ -839,7 +652,7 @@ begin
 		constant td_ctp  : natural := 15;
 		constant td_done : natural := 16;
 		variable x1_idx, x2_idx, x3_idx, x4_idx, tp_idx 
-			: natural range 0 to 16;
+			: natural range 0 to 15;
 		
 	begin
 		if RESET = '1' then
@@ -1543,5 +1356,5 @@ begin
 		CPA <= (state /= idle_s);
 	end process;
 	
-	TP <= to_std_logic(SI2CACK);
+	TP <= df_reg(0);
 end behavior;
