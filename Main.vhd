@@ -57,6 +57,8 @@
 -- our VCC = 1.02 V. We see zero-glitches in telemetry signals 
 -- after programming, when chip is warm, then they stop.
 
+-- V2.9 [27-NOV-26] Moving the Software Dispatcher to PCK = 2.5 MHz.
+
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -147,11 +149,11 @@ architecture behavior of main is
 -- not be always increasing with mask bit index. We find the period
 -- of the ring oscillator is more consistent from one compile to 
 -- the next if we preserve the control signals too.
-	signal TCK, FCK, MCK : std_logic;
+	signal TCK, FCK, PCK, MCK : std_logic;
 	signal FCKEN : boolean; 
 	signal fck_mask : fck_mask_type := default_fck_mask;
-	attribute syn_keep of TCK, FCK, FCKEN, fck_mask : signal is true;
-	attribute nomerge of TCK, FCK, FCKEN, fck_mask : signal is ""; 
+	attribute syn_keep of TCK, FCK, PCK, MCK, FCKEN, fck_mask : signal is true;
+	attribute nomerge of TCK, FCK, PCK, MCK, FCKEN, fck_mask : signal is ""; 
 
 -- Sample Memory and Accumulator
 	subtype smem_data_type is std_logic_vector(17 downto 0);
@@ -351,16 +353,18 @@ begin
 			CK => FCK
 		);
 		
--- The Transmit Clock is FCK divided by two, clocked on the
--- falling edge of FCK. The use of the falling edge is essential
--- to both the Message Transmitter and the Microcontroller.
-	Transmit_Clock : process (all) is
+-- The Clock Divider produces the Transmit Clock (TCK) for the-- Message Transmitter, 5 MHz, and the Processor Clock (PCK) for
+-- the Software Dispatcher, 2.5 MHz.
+	Clock_Divider : process (all) is
 	begin
 		if falling_edge(FCK) then
 			TCK <= not TCK;
+			if TCK = '1' then
+				PCK <= not PCK;
+			end if;
 		end if;
 	end process;
-		
+	
 -- The Telemetry Manager cycles through thirty-two states. It runs-- off the rising edge of RCK, and so completes its cycles at 
 -- 1024 Hz. In states zero and one, it does nothing, so as to make 
 -- sure that the dispatch processes initiated in the previous cycle 
@@ -648,18 +652,18 @@ begin
 	Dispatcher_ROM : entity ROM
 		port map (
 			Address => prog_cntr(8 downto 0),
-			OutClock => not TCK,
+			OutClock => not PCK,
 			OutClockEn => '1',
 			Reset => '0',
 			Q => prog_data
 		);
 -- The Software Dispatcher Process Memory. This is a single-port 
--- RAM built in LUTs. We write on the rising edge of TCK and our
--- reads are asynchronous.
+-- RAM built in LUTs. We write on the rising edge of the
+-- microcontroller clock and our reads are asynchronous.
 	Dispatcher_RAM : entity RAM
 		port map (
 			Address => mcu_addr(mmu_ram_len-1 downto 0),
-			Clock => TCK,
+			Clock => PCK,
 			ClockEn => '1',
 			WE => RAMWR,
 			Data => mcu_data_out,
@@ -673,9 +677,9 @@ begin
 -- so obtain some reduction in its size. We do not drive its Interrupt
 -- Request (IRQ) or Clock Enable (CKEN) inputs. We do not use its 
 -- Interrupt Service (ISRV) or Read Data Strobe (RDS) outputs. The
--- MCU runs of the Transmit Clock (TCK), which is half the Fast Clock
--- (FCK). Because TCK runs off the falling edges of FCK, a TCK rising
--- edge will occur just after an FCK falling edge.
+-- MCU runs of the Processor Clock (TCK), which is one quarter the 
+-- Fast Clock (FCK). Because PCK runs off the falling edges of FCK, 
+-- a PCK rising edge will occur just after an FCK falling edge.
 	Software_Dispatcher : entity RMC5_MCU
 		generic map (
 			addr_len => mcu_addr_len,
@@ -690,7 +694,7 @@ begin
 			WDS => WDS,
 			IRQ => false,
 			RESET => RESET,
-			CK => TCK,
+			CK => PCK,
 			CKEN => true
 		);
 	
@@ -751,7 +755,7 @@ begin
 			TDRSTACC <= '0';
 			CMDACK <= false;
 			CMRD <= '0';
-		elsif rising_edge(TCK) then
+		elsif rising_edge(PCK) then
 			SWRST <= false;
 			TXI <= false;
 			TDWRSM <= '0';
@@ -1172,7 +1176,7 @@ begin
 		WrClock => RCK,
 		WrEn => CMWR,
 		Data => cmd_in,
-		RdClock => not TCK,
+		RdClock => not PCK,
 		RdEn => CMRD,
 		AlmostEmpty => CME,
 		Full => CMF,
