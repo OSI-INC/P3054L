@@ -17,12 +17,9 @@ const mmu_i2cA1 0x020E ; i2c SDA=A SCL=1 (Write)
 const mmu_i2cZ0 0x020F ; i2c SDA=Z SCL=0 (Write)
 const mmu_i2cZ1 0x0210 ; i2c SDA=Z SCL=1 (Write)
 const mmu_i2cMR 0x0211 ; i2c Most Recent Eight Bits (Read)
-const mmu_x1cfg 0x0212 ; X1 Configuration (Write)
-const mmu_x2cfg 0x0213 ; X2 Configuration (Write)
-const mmu_x3cfg 0x0214 ; X3 Configuration (Write)
-const mmu_x4cfg 0x0215 ; X4 Configuration (Write)
-const mmu_saddr 0x0216 ; Sample Memory Addr (Write)
-const mmu_sacc  0x0217 ; Sample Accumulator Control (Write/Strobe)
+const mmu_shift 0x0212 ; X1 Configuration (Write)
+const mmu_saddr 0x0213 ; Sample Memory Addr (Write)
+const mmu_sacc  0x0214 ; Sample Accumulator Control (Write/Strobe)
 
 ; Regiser locations.
 const reg_B     0x0100 

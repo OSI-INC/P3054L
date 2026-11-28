@@ -151,12 +151,8 @@ architecture behavior of main is
 	signal smem_addr : smem_addr_type; -- Sample Memory Addr
 
 -- Telemetry Manager
-	signal tm_addr : smem_addr_type; -- Manager Sample Select
-	signal adc_shift : natural range 0 to 7; -- ADC sample left shift.
 	subtype transmit_shift_type is std_logic_vector(3 downto 0);
 	signal transmit_shift : transmit_shift_Type;
-	signal X1EN, X2EN, X3EN, X4EN : boolean;
-	signal x1_shift, x2_shift, x3_shift, x4_shift : natural range 0 to 7;
 		
 -- ADC Reader
 	signal ADCCAL, -- Calibrate the Selected ADC
@@ -169,6 +165,7 @@ architecture behavior of main is
 		ADCBIT, -- ADC Bit for Sample Data
 		ADCADD -- ADC Reader Request Addition
 		: std_logic;
+	signal adc_shift : natural range 0 to 7; -- ADC sample left shift.
 
 -- Configuration of RMC5 Microcontroller.
 	constant mcu_addr_len : positive := 10;
@@ -211,12 +208,9 @@ architecture behavior of main is
 	constant mmu_i2cZ0 : natural := 16#0F#; -- i2c SDA=Z SCL=0 (Write)
 	constant mmu_i2cZ1 : natural := 16#10#; -- i2c SDA=Z SCL=1 (Write)
 	constant mmu_i2cMR : natural := 16#11#; -- i2C Most Recent Eight Bits (Read)
-	constant mmu_x1cfg : natural := 16#12#; -- X1 Configuration (Write)
-	constant mmu_x2cfg : natural := 16#13#; -- X2 Configuration (Write)
-	constant mmu_x3cfg : natural := 16#14#; -- X3 Configuration (Write)
-	constant mmu_x4cfg : natural := 16#15#; -- X4 Configuration (Write)
-	constant mmu_saddr : natural := 16#16#; -- Sample Memory Addr (Write)
-	constant mmu_sacc  : natural := 16#17#; -- Sample Accumulator Control (Write/Strobe)
+	constant mmu_shift : natural := 16#12#; -- ADC Shift (Write)
+	constant mmu_saddr : natural := 16#13#; -- Sample Memory Addr (Write)
+	constant mmu_sacc  : natural := 16#14#; -- Sample Accumulator Control (Write/Strobe)
 	
 -- Microcontroller Flags, Buses, and Registers
 	subtype mcu_addr_type is std_logic_vector(mcu_addr_len-1 downto 0);
@@ -233,7 +227,6 @@ architecture behavior of main is
 		TDACK, -- Telemetry Dispatcher Acknowledge
 		SRRQ, -- Sensor Reader Request
 		SRACK, -- Sensor Reader Acknowledge
-		SDBSY, -- Software Dispatcher Busy
 		SDSHSD -- Software Dispatcher Shift Sample Data
 		: boolean := false;
 	signal SDWRSM, -- Software Dispatcher Write to Sample Memory
@@ -364,86 +357,59 @@ begin
 		end if;
 	end process;
 	
--- The Telemetry Manager cycles through thirty-two states. It runs-- off the rising edge of RCK, and so completes its cycles at 
+-- The Telemetry Scheduler cycles through thirty-two states. It runs-- off the rising edge of RCK, and so completes its cycles at 
 -- 1024 Hz. In states zero and one, it does nothing, so as to make 
 -- sure that the dispatch processes initiated in the previous cycle 
--- have completed their work. In states two to fifteen, it calls 
--- acquisition processes. In states sixteen to thirty-one the 
--- manager picks one of the sixteen states at random in which to 
--- call the Telemetry Dispatcher. The dispatcher's operations may 
--- take up to three RCK cycles to complete, so if the dispatcher is-- called in state thirty-one, its operations may not complete until 
--- the manager is in state one. This overlap into state one is why 
--- the manager does nothing in states zero and one. 
+-- have completed their work. In state two, it calls the Sensor
+-- Reader process, which is provided by the Software Dispatcher.-- In states sixteen to thirty-one the manager picks one of the 
+-- sixteen states at random in which to call the Telemetry 
+-- Dispatcher, which is also provided by the Software Dispatcher.
+-- The dispatcher's operations may take up to three RCK cycles to 
+-- complete, so if the dispatcher is called in state thirty-one, 
+-- its operations may not complete until the manager is in state 
+-- one. This overlap into state one is why the manager does nothing-- in states zero and one. 
 --
--- During the acquisition states two to fifteen, the Telemetry 
--- Manager updates the sample memory as required by the telemetry 
--- protocol. The manager will not aquire or update each sample memory 
--- location on each cycle, but may instead wait for some number of 
--- cycles before updating. Whenever the manager updates the sample 
--- memory, it does so by setting some control signals and calling 
--- an acquisition process that runs off the falling edge of FCK. The 
--- manager and acquisition process x cooperate through the use of
--- two signals xRQ and xACK. The manager toggles xRQ to start 
--- process x. The xRQ and xACK will now be unequal, and this inequality
--- starts FCK. The FCK signal will go HI. On the falling edge of FCK, 
--- process x detects xRQ xor xACK and starts running. When process x 
--- is done, it toggles xACK and returns to its idle state on the same
--- falling edge of FCK. Now that xACK and xRQ are equal, FCK stops 
--- running. It remains LO and process x stays in its idle state. When
--- FCK starts running for another process, process x remains in its
--- idle state. The manager assumes that every acquisition process 
--- will complete within one RCK cycle, so it does not bother to watch 
--- the acquisition busy flag.
+-- During the acquisition states two to fifteen, the Sensor Reader 
+-- updates the sample memory as required by the telemetry protocol. 
+-- The scheduler and reader cooperate through the use of two signals 
+-- SRRQ and SRACK. The manager toggles SRRQ to start the reader. 
+-- The SRRQ and SRACK signals will now be unequal, and this inequality
+-- starts FCK, which in turn starts the PCK clock that the Software
+-- Dispatcher runs on. The FCK signal will go HI. On a subsequent 
+-- falling edge of FCK, PCK will also fall, and the reader detects 
+-- SRRQ xor SRACK and starts running. When the reader is done, it 
+-- toggles SRACK and returns to its idle state on the next rising
+-- edge of PCK, which occurs just after a falling edge of FCK. Now
+-- that SRACK and SRRQ are equal, FCK stops running. It remains LO and 
+-- the reader stays in its idle state. When FCK starts running for 
+-- another process, the reader remains in its idle state.
 --
--- In states sixteen to thirty-one, the Telemetry Manager uses the four
+-- In states sixteen to thirty-one, the Telemetry Scheduler uses the four
 -- transmit_shift bits to pick one of these sixteen states to start the
--- Telemetry Dispatcher. These bits are randomized by the ADC Reader 
--- acquisition process using the least significant bits of ADC samples.
--- The dispatcher runs off the falling edge of FCK and interacts with 
--- the manager in the same way as do acquisition processes: with a 
--- request and acknowledge toggle handshake.
-	Telemetry_Manager : process (all) is
+-- Telemetry Dispatcher, which is provided by the Software Dispatcher. 
+-- These zhift bits are randomized by the ADC Reader acquisition process 
+-- using the least significant bits of ADC samples. The dispatcher runs 
+-- off the falling edge of PCK and interacts with the manager in the same-- way as do acquisition processes: with a request and acknowledge toggle 
+-- handshake.
+--
+-- Another service the scheduler provides is to generate the Millisecond
+-- Clock (MCK), which runs at 1024 Hz.
+	Telemetry_Scheduler : process (all) is
 		constant cycle_len : positive := 32;
 		variable state, next_state : natural range 0 to cycle_len-1;
 	begin
 		if (RESET = '1') then
 			ADCCAL <= true;
-			ADCRQ <= false;
 			TDRQ <= false;
 			SRRQ <= false;
 			MCK <= '0';
 			state := 0;
-			adc_shift <= 0;
-			tm_addr <= (others => '0');
 		elsif rising_edge(RCK) then
 			next_state := (state + 1) mod cycle_len;
 
 			if (state = 2) then
-				tm_addr <= x1_addr;
-				adc_shift <= x1_shift;
-				if X1EN then 
-					ADCRQ <= not ADCRQ;
-				end if;
-			elsif (state = 3) then
-				tm_addr <= x2_addr;
-				adc_shift <= x2_shift;
-				if X2EN then 
-					ADCRQ <= not ADCRQ;
-				end if;
-			elsif (state = 4) then
-				tm_addr <= x3_addr;
-				adc_shift <= x3_shift;
-				if X3EN then 
-					ADCRQ <= not ADCRQ;
-				end if;
-			elsif (state = 5) then
-				tm_addr <= x4_addr;
-				adc_shift <= x4_shift;
-				if X4EN then 
-					ADCRQ <= not ADCRQ;
-				end if;
-			elsif (state = 6) then
 				SRRQ <= not SRRQ;
+			elsif (state = 15) then
 				ADCCAL <= false;
 			elsif (state = to_integer(unsigned(transmit_shift))+16) then
 				TDRQ <= not TDRQ;
@@ -461,14 +427,12 @@ begin
 
 -- The Sample Memory is eighteen bits wide so as to accommodate
 -- the sum of up to sixteen of fourteen-bit ADC samples. The 
--- sample memory runs off the fast clock(FCK) to work well with 
--- the Sample Controller and the Telemetry Dispatcher, which also
--- run on FCK.
+-- sample memory runs off the Processor Clock (PCK).
 	Sample_Memory : entity SMRAM port map (
 		Clock => not PCK,
 		ClockEn => '1',
  		WE => ADCWRSM or SDWRSM,
-		Address => smem_addr, 
+		Address => sd_addr, 
 		Data => acc_data,
 		Q => smem_data);
 
@@ -477,9 +441,7 @@ begin
 -- any one of the shift signals provided by those same processes.
 	Sample_Register : process (all) is
 	begin
-		if RESET = '1' then
-			sample_data <= (others => '0');
-		elsif falling_edge(PCK) then
+		if falling_edge(PCK) then
 			if ADCSHSD or SDSHSD then
 				sample_data(17 downto 1) <= sample_data(16 downto 0);
 				sample_data(0) <=
@@ -488,18 +450,7 @@ begin
 			end if;
 		end if;
 	end process;	
-
--- The Sample Address Multiplexer chooses either the Telemetry-- Dispatcher address or the Telemetry Manager address for the
--- Sample Memory. The Telemetry Dispatcher takes priority.
-	Sample_Addr_Mux : process (all) is 
-	begin
-		if SDBSY then
-			smem_addr <= sd_addr;
-		else
-			smem_addr <= tm_addr;
-		end if;
-	end process;
-		
+	
 -- The Sample Accumulator adds the sample data to the output 
 -- of the sample memory. We can reset its output to zero with
 -- its reset line.
@@ -513,7 +464,7 @@ begin
 	);
 
 -- The ADC Reader is an acquisition process called by the Telemetry 
--- Manager. It runs off the falling edge of FCK. It starts up when-- it seesl ADCRQ xor ADCACK. When the ADCCAL flag is set, the reader
+-- Manager. It runs off the falling edge of PCK. It starts up when-- it seesl ADCRQ xor ADCACK. When the ADCCAL flag is set, the reader
 -- performs an extra-long read that initiates the ADC self-calibration
 -- provided that this is the first ADC read after power-up. At all other
 -- times, the reader performs a fourteen-bit sample read. To prepare for
@@ -632,10 +583,10 @@ begin
 			state := next_state;
 		end if;
 
-		NADC1 <= to_std_logic(not (ADCCS and (tm_addr = x1_addr)));
-		NADC2 <= to_std_logic(not (ADCCS and (tm_addr = x2_addr)));
-		NADC3 <= to_std_logic(not (ADCCS and (tm_addr = x3_addr)));
-		NADC4 <= to_std_logic(not (ADCCS and (tm_addr = x4_addr)));
+		NADC1 <= to_std_logic(not (ADCCS and (sd_addr = x1_addr)));
+		NADC2 <= to_std_logic(not (ADCCS and (sd_addr = x2_addr)));
+		NADC3 <= to_std_logic(not (ADCCS and (sd_addr = x3_addr)));
+		NADC4 <= to_std_logic(not (ADCCS and (sd_addr = x4_addr)));
 	end process;
 
 -- Software Dispatcher Instruction Memory. This read-only memory
@@ -738,7 +689,7 @@ begin
 		end case;
 		
 		-- Control register write access memory map. Writes take place on 
-		-- the rising edge of CK. We use RESET to clear some registers and 
+		-- the rising edge of PCK. We use RESET to clear some registers and 
 		-- signals, but not all.
 		if (RESET = '1') then
 			df_reg <= (others => '0');
@@ -747,18 +698,14 @@ begin
 			PUACK <= false;
 			CMDACK <= false;
 			SRACK <= false;
-			SDBSY <= false;
+			ADCRQ <= false;
 			SDWRSM <= '0';
 			SDRSTACC <= '0';
+			SDSHSD <= false;
+			SDADD <= '0';
+			SDBIT <= '0';
 			CMRD <= '0';
-			x1_shift <= 4;
-			X1EN <= true;
-			x2_shift <= 4;
-			X2EN <= true;
-			x3_shift <= 4;
-			X3EN <= true;
-			x4_shift <= 4;
-			X4EN <= true;
+			adc_shift <= 4;
 			rf_calib <= default_rf_calib;
 			fck_mask <= default_fck_mask;
 			SWRST <= false;
@@ -767,6 +714,8 @@ begin
 			TXI <= false;
 			SDWRSM <= '0';
 			SDRSTACC <= '0';
+			SDSHSD <= false;
+			SDADD <= '0';
 			CMRD <= '0';
 			if (full_addr >= mmu_ctrl_bot) and (full_addr <= mmu_ctrl_top) then
 				if WDS then
@@ -783,6 +732,9 @@ begin
 						end if;
 						if (mcu_data_out(3) = '1') then
 							SRACK <= SRRQ;
+						end if;
+						if (mcu_data_out(4) = '1') then
+							ADCRQ <= not ADCRQ;
 						end if;
 					when mmu_dfr => 
 						df_reg <= mcu_data_out(3 downto 0);
@@ -802,10 +754,9 @@ begin
 					when mmu_sacc =>
 						SDRSTACC <= mcu_data_out(0);					
 						SDWRSM <= mcu_data_out(1);
-						SDBSY <= (mcu_data_out(2) = '1');
-						SDSHSD <= (mcu_data_out(3) = '1');
-						SDADD <= mcu_data_out(4);
-						SDBIT <= mcu_data_out(5);
+						SDSHSD <= (mcu_data_out(2) = '1');
+						SDADD <= mcu_data_out(3);
+						SDBIT <= mcu_data_out(4);
 					when mmu_i2c00 => 
 						SDA <= '0';
 						SCL <= '0';
@@ -834,18 +785,8 @@ begin
 						SCL <= '1';
 						i2c_in(7 downto 1) <= i2c_in(6 downto 0);
 						i2c_in(0) <= SDA;
-					when mmu_x1cfg =>
-						x1_shift <= to_integer(unsigned(mcu_data_out(2 downto 0)));
-						X1EN <= (mcu_data_out(3) = '1');
-					when mmu_x2cfg =>
-						x2_shift <= to_integer(unsigned(mcu_data_out(2 downto 0)));
-						X2EN <= (mcu_data_out(3) = '1');
-					when mmu_x3cfg =>
-						x3_shift <= to_integer(unsigned(mcu_data_out(2 downto 0)));
-						X3EN <= (mcu_data_out(3) = '1');
-					when mmu_x4cfg =>
-						x4_shift <= to_integer(unsigned(mcu_data_out(2 downto 0)));
-						X4EN <= (mcu_data_out(3) = '1');
+					when mmu_shift =>
+						adc_shift <= to_integer(unsigned(mcu_data_out(2 downto 0)));
 					when others => 
 						null;
 					end case;
