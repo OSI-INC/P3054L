@@ -114,7 +114,8 @@ architecture behavior of main is
 	signal SWRST : boolean := false;
 	
 -- Configuration and Calibration Signals
-	signal PURQ, PUACK : boolean := false;
+	constant PURQ : boolean := true;
+	signal PUACK : boolean := false;	
 	
 -- Ring Oscillator, Fast Clock, and Transmit Clock. We want the 
 -- compiler to preserve the fck_mask bits or else FCK period will 
@@ -128,10 +129,6 @@ architecture behavior of main is
 	attribute syn_keep of TCK, FCK, PCK, MCK, FCKEN, fck_mask : signal is true;
 	attribute nomerge of TCK, FCK, PCK, MCK, FCKEN, fck_mask : signal is ""; 
 
--- Sample Memory and Accumulator
--- Configuration of the Telemetry Manager
-	constant TMRUN : boolean := true; -- Run the Telemetry Protocol
-	
 -- Sample Memory Locations
 	constant smem_addr_len : positive := 4;
 	subtype smem_addr_type is std_logic_vector(smem_addr_len-1 downto 0);
@@ -155,7 +152,7 @@ architecture behavior of main is
 
 -- Telemetry Manager
 	signal tm_addr : smem_addr_type; -- Manager Sample Select
-	signal adc_shift : natural range 0 to 4; -- ADC sample left shift.
+	signal adc_shift : natural range 0 to 7; -- ADC sample left shift.
 	subtype transmit_shift_type is std_logic_vector(3 downto 0);
 	signal transmit_shift : transmit_shift_Type;
 	signal X1EN, X2EN, X3EN, X4EN : boolean;
@@ -166,11 +163,11 @@ architecture behavior of main is
 		ADCCS, -- ADC Chip Select
 		ADCRQ, -- Request ADC Read
 		ADCACK, -- Acknowledge ADC Read
-		ADCSHSD -- ADC Reader Shifts Sample Data
+		ADCSHSD -- ADC Reader Shift Sample Data
 		: boolean := false;
 	signal ADCWRSM, -- ADC Reader Write to Sample Memory
 		ADCBIT, -- ADC Bit for Sample Data
-		ADCADD -- ADC Reader Requests Addition
+		ADCADD -- ADC Reader Request Addition
 		: std_logic;
 
 -- Configuration of RMC5 Microcontroller.
@@ -232,16 +229,18 @@ architecture behavior of main is
 	signal df_reg : nibble_type;
 
 -- Software Dispatcher.
-	signal SMWRSM, -- Telemetry Dispatcher Write to Sample Memory
-		SMRSTACC -- Telemetry Dispatcher Resets Accumulator
-		: std_logic;
 	signal TDRQ, -- Telemetry Dispatcher Request
 		TDACK, -- Telemetry Dispatcher Acknowledge
-		SMBSY, -- Telemetry Dispatcher Busy
 		SRRQ, -- Sensor Reader Request
 		SRACK, -- Sensor Reader Acknowledge
-		SRBSY -- Sensor Reader Busy
+		SDBSY, -- Software Dispatcher Busy
+		SDSHSD -- Software Dispatcher Shift Sample Data
 		: boolean := false;
+	signal SDWRSM, -- Software Dispatcher Write to Sample Memory
+		SDBIT, -- Software Dispatcher Bit for Sample Data
+		SDADD, -- Software Dispatcher Requests Addition
+		SDRSTACC -- Software Dispatcher Reset Accumulator
+		: std_logic;
 	signal sd_addr : smem_addr_type; -- Software Dispatcher Sample Select
 
 -- Message Transmission. The syn_keep and nomerge reduce code size 
@@ -335,17 +334,6 @@ begin
 		end if;
 	end process;
 
--- Power-Up Flag. This flag we set upon reset and it causes the
--- Software Dispatcher to read calibration and configuration 
--- records from the NVM.
-	Configure : process (all) is
-	begin
-		if (RESET = '1') then
-			PURQ <= true;
-		end if;
-	end process;
-
-
 -- The Fast Clock entity produces FCK. The ring oscillator should be 
 -- calibrated so that it produces FCK of 10 MHz. The Fast Clock is
 -- enabled whenever the request and acknowledgment signals of one of
@@ -413,58 +401,52 @@ begin
 -- acquisition process using the least significant bits of ADC samples.
 -- The dispatcher runs off the falling edge of FCK and interacts with 
 -- the manager in the same way as do acquisition processes: with a 
--- request and acknowledge toggle handshake.--
--- We can disable all acquisition and dispatch by setting the TMRUN 
--- flag to false. The Telemetry Manager will keep running through its
--- cycle, which means it can still provide the millisecond clock (MCK),
--- which is used by other processes for measuring intervals.
+-- request and acknowledge toggle handshake.
 	Telemetry_Manager : process (all) is
 		constant cycle_len : positive := 32;
 		variable state, next_state : natural range 0 to cycle_len-1;
 	begin
 		if (RESET = '1') then
-			ADCRQ <= false;
 			ADCCAL <= true;
+			ADCRQ <= false;
 			TDRQ <= false;
+			SRRQ <= false;
 			MCK <= '0';
 			state := 0;
 			adc_shift <= 0;
 			tm_addr <= (others => '0');
-			SRRQ <= false;
 		elsif rising_edge(RCK) then
 			next_state := (state + 1) mod cycle_len;
 
-			if TMRUN then 
-				if (state = 2) then
-					tm_addr <= x1_addr;
-					adc_shift <= x1_shift;
-					if X1EN then 
-						ADCRQ <= not ADCRQ;
-					end if;
-				elsif (state = 3) then
-					tm_addr <= x2_addr;
-					adc_shift <= x2_shift;
-					if X2EN then 
-						ADCRQ <= not ADCRQ;
-					end if;
-				elsif (state = 4) then
-					tm_addr <= x3_addr;
-					adc_shift <= x3_shift;
-					if X3EN then 
-						ADCRQ <= not ADCRQ;
-					end if;
-				elsif (state = 5) then
-					tm_addr <= x4_addr;
-					adc_shift <= x4_shift;
-					if X4EN then 
-						ADCRQ <= not ADCRQ;
-					end if;
-				elsif (state = 6) then
-					SRRQ <= not SRRQ;
-					ADCCAL <= false;
-				elsif (state = to_integer(unsigned(transmit_shift))+16) then
-					TDRQ <= not TDRQ;
+			if (state = 2) then
+				tm_addr <= x1_addr;
+				adc_shift <= x1_shift;
+				if X1EN then 
+					ADCRQ <= not ADCRQ;
 				end if;
+			elsif (state = 3) then
+				tm_addr <= x2_addr;
+				adc_shift <= x2_shift;
+				if X2EN then 
+					ADCRQ <= not ADCRQ;
+				end if;
+			elsif (state = 4) then
+				tm_addr <= x3_addr;
+				adc_shift <= x3_shift;
+				if X3EN then 
+					ADCRQ <= not ADCRQ;
+				end if;
+			elsif (state = 5) then
+				tm_addr <= x4_addr;
+				adc_shift <= x4_shift;
+				if X4EN then 
+					ADCRQ <= not ADCRQ;
+				end if;
+			elsif (state = 6) then
+				SRRQ <= not SRRQ;
+				ADCCAL <= false;
+			elsif (state = to_integer(unsigned(transmit_shift))+16) then
+				TDRQ <= not TDRQ;
 			end if;
 			
 			if (state <= 15) then
@@ -473,7 +455,7 @@ begin
 				MCK <= '1';
 			end if;
 
-		state := next_state;
+			state := next_state;
 		end if;
 	end process;
 
@@ -483,9 +465,9 @@ begin
 -- the Sample Controller and the Telemetry Dispatcher, which also
 -- run on FCK.
 	Sample_Memory : entity SMRAM port map (
-		Clock => not FCK,
+		Clock => not PCK,
 		ClockEn => '1',
- 		WE => ADCWRSM or SMWRSM,
+ 		WE => ADCWRSM or SDWRSM,
 		Address => smem_addr, 
 		Data => acc_data,
 		Q => smem_data);
@@ -497,11 +479,12 @@ begin
 	begin
 		if RESET = '1' then
 			sample_data <= (others => '0');
-		elsif falling_edge(FCK) then
-			if ADCSHSD then
+		elsif falling_edge(PCK) then
+			if ADCSHSD or SDSHSD then
 				sample_data(17 downto 1) <= sample_data(16 downto 0);
 				sample_data(0) <=
-					(ADCBIT and to_std_logic(ADCSHSD));
+					(ADCBIT and to_std_logic(ADCSHSD))
+					or (SDBIT and to_std_logic(SDSHSD));
 			end if;
 		end if;
 	end process;	
@@ -510,7 +493,7 @@ begin
 -- Sample Memory. The Telemetry Dispatcher takes priority.
 	Sample_Addr_Mux : process (all) is 
 	begin
-		if SMBSY then
+		if SDBSY then
 			smem_addr <= sd_addr;
 		else
 			smem_addr <= tm_addr;
@@ -524,9 +507,9 @@ begin
 		DataA => sample_data,
 		DataB => smem_data,
 		Result => acc_data,
-		Clock => not FCK,
-		ClockEn => ADCADD,
-		Reset => SMRSTACC
+		Clock => not PCK,
+		ClockEn => ADCADD or SDADD,
+		Reset => SDRSTACC
 	);
 
 -- The ADC Reader is an acquisition process called by the Telemetry 
@@ -565,7 +548,7 @@ begin
 		-- the reader reads nine trailing zeros before releasing 
 		-- chip select. Whenever chip select is released, the ADC
 		-- performs another conversion.
-		elsif falling_edge(FCK) then
+		elsif falling_edge(PCK) then
 
 			-- The state progression logic. The process starts
 			-- when it sees ADCRQ xor ADCACK.
@@ -756,21 +739,18 @@ begin
 		
 		-- Control register write access memory map. Writes take place on 
 		-- the rising edge of CK. We use RESET to clear some registers and 
-		-- signals, but not all. In particular, we do not clear Software 
-		-- Reset (SWRST) on RESET because we want SWRST itself to cause 
-		-- RESET to be asserted for one full CK period. After a reset, the
-		-- cpu address will not select the SWRST location, so SWRST will 
-		-- be cleared on the next rising edge of CK.
+		-- signals, but not all.
 		if (RESET = '1') then
 			df_reg <= (others => '0');
 			TXI <= false;
 			TDACK <= false;
-			SMBSY <= false;
-			SMWRSM <= '0';
-			SMRSTACC <= '0';
-			CMDACK <= false;
-			CMRD <= '0';
 			PUACK <= false;
+			CMDACK <= false;
+			SRACK <= false;
+			SDBSY <= false;
+			SDWRSM <= '0';
+			SDRSTACC <= '0';
+			CMRD <= '0';
 			x1_shift <= 4;
 			X1EN <= true;
 			x2_shift <= 4;
@@ -781,11 +761,12 @@ begin
 			X4EN <= true;
 			rf_calib <= default_rf_calib;
 			fck_mask <= default_fck_mask;
+			SWRST <= false;
 		elsif rising_edge(PCK) then
 			SWRST <= false;
 			TXI <= false;
-			SMWRSM <= '0';
-			SMRSTACC <= '0';
+			SDWRSM <= '0';
+			SDRSTACC <= '0';
 			CMRD <= '0';
 			if (full_addr >= mmu_ctrl_bot) and (full_addr <= mmu_ctrl_top) then
 				if WDS then
@@ -800,7 +781,7 @@ begin
 						if (mcu_data_out(2) = '1') then
 							PUACK <= PURQ;
 						end if;
-						if (mcu_data_out(2) = '1') then
+						if (mcu_data_out(3) = '1') then
 							SRACK <= SRRQ;
 						end if;
 					when mmu_dfr => 
@@ -819,9 +800,12 @@ begin
 					when mmu_saddr =>
 						sd_addr <= mcu_data_out(smem_addr_len-1 downto 0);
 					when mmu_sacc =>
-						SMRSTACC <= mcu_data_out(0);					
-						SMWRSM <= mcu_data_out(1);
-						SMBSY <= (mcu_data_out(2) = '1');
+						SDRSTACC <= mcu_data_out(0);					
+						SDWRSM <= mcu_data_out(1);
+						SDBSY <= (mcu_data_out(2) = '1');
+						SDSHSD <= (mcu_data_out(3) = '1');
+						SDADD <= mcu_data_out(4);
+						SDBIT <= mcu_data_out(5);
 					when mmu_i2c00 => 
 						SDA <= '0';
 						SCL <= '0';
@@ -997,12 +981,10 @@ begin
 			-- the modulation frequency to go from high to low on the falling edge of
 			-- TCK.
 			elsif (TXB xor (TCK = '1')) then
-				xdac <= std_logic_vector(to_unsigned(
-					rf_calib + frequency_step,5));
+				xdac <= std_logic_vector(to_unsigned(rf_calib + frequency_step,5));
 				FHI <= true;
 			else
-				xdac <= std_logic_vector(to_unsigned(
-					rf_calib,5));
+				xdac <= std_logic_vector(to_unsigned(rf_calib,5));
 				FHI <= false;
 			end if;
 		end if;
