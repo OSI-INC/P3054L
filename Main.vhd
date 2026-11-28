@@ -58,6 +58,9 @@
 -- after programming, when chip is warm, then they stop.
 
 -- V2.9 [27-NOV-26] Moving the Software Dispatcher to PCK = 2.5 MHz.
+-- Change Telemetry Manger to Telemetry Scheduler and move the
+-- Sensor Reader into the Software Dispatcher. Rearrange control
+-- space to simplify decoding.
 
 
 library ieee;
@@ -136,12 +139,6 @@ architecture behavior of main is
 	constant x2_addr   : smem_addr_type := "0001";
 	constant x3_addr   : smem_addr_type := "0010";
 	constant x4_addr   : smem_addr_type := "0011";
-	constant temp_addr : smem_addr_type := "0100";
-	constant accx_addr : smem_addr_type := "0101";
-	constant accy_addr : smem_addr_type := "0110";
-	constant accz_addr : smem_addr_type := "0111";
-	constant ack_addr  : smem_addr_type := "1000";
-	constant conf_addr : smem_addr_type := "1001";
 
 -- Sample Memory Signals
 	subtype smem_data_type is std_logic_vector(17 downto 0);
@@ -150,7 +147,7 @@ architecture behavior of main is
 	signal sample_data : smem_data_type; -- Accumulator Input
 	signal smem_addr : smem_addr_type; -- Sample Memory Addr
 
--- Telemetry Manager
+-- Telemetry Scheduler
 	subtype transmit_shift_type is std_logic_vector(3 downto 0);
 	signal transmit_shift : transmit_shift_Type;
 		
@@ -182,36 +179,38 @@ architecture behavior of main is
 	constant mmu_ctrl_top  : natural := 16#02FF#;
 	constant mmu_cmd_bot   : natural := 16#0300#;
 	constant mmu_cmd_top   : natural := 16#03FF#;
-	constant mmu_ctrl_len : positive := 5; -- Register Address Length
-	constant mmu_ram_len : positive := 5; -- Process RAM Address Length
+	constant mmu_ctrl_len  : positive := 5; -- Register Address Length
+	constant mmu_ram_len   : positive := 5; -- Process RAM Address Length
 	
--- Register Locations. We specify the offset from the start of the control
--- space. When a location is a control register shadowed in RAM, we say it 
--- is "Write/Readback". When writing to a location stores a value, we say
--- "Write". When a location can be read but not written, we say it is 
--- "Read". When writing or reading initiates a process we say "Strobe". 
-	constant mmu_irqb  : natural := 16#00#; -- Interrupt Request Bits (Read)
-	constant mmu_irst  : natural := 16#01#; -- Interrupt Reset Bits (Write)
-	constant mmu_acfg  : natural := 16#02#; -- Amplifier Configuration (Write)
-	constant mmu_led   : natural := 16#03#; -- Lamp Switch (Write)
-	constant mmu_rst   : natural := 16#04#; -- Software Reset (Write)
-	constant mmu_xch   : natural := 16#05#; -- Transmit Channel Number (Write/Strobe)
-	constant mmu_rfc   : natural := 16#06#; -- Radio Frequency Calibration (Write)	
-	constant mmu_dfr   : natural := 16#07#; -- Diagnostic Flags (Write)
-	constant mmu_sr    : natural := 16#08#; -- Status Register (Read)
-	constant mmu_cmp   : natural := 16#09#; -- Command Memory Portal (Read/Write/Strobe)
-	constant mmu_fck   : natural := 16#0A#; -- Fast Clock Mask (Write)
-	constant mmu_i2c00 : natural := 16#0B#; -- i2c SDA=0 SCL=0 (Write)
-	constant mmu_i2c01 : natural := 16#0C#; -- i2c SDA=0 SCL=1 (Write)
-	constant mmu_i2cA0 : natural := 16#0D#; -- i2c SDA=A SCL=0 (Write)
-	constant mmu_i2cA1 : natural := 16#0E#; -- i2c SDA=A SCL=1 (Write)
-	constant mmu_i2cZ0 : natural := 16#0F#; -- i2c SDA=Z SCL=0 (Write)
-	constant mmu_i2cZ1 : natural := 16#10#; -- i2c SDA=Z SCL=1 (Write)
-	constant mmu_i2cMR : natural := 16#11#; -- i2C Most Recent Eight Bits (Read)
-	constant mmu_shift : natural := 16#12#; -- ADC Shift (Write)
-	constant mmu_saddr : natural := 16#13#; -- Sample Memory Addr (Write)
-	constant mmu_sacc  : natural := 16#14#; -- Sample Accumulator Control (Write/Strobe)
-	
+-- MMU Read Registers.
+	constant mmu_irqb  : natural := 16#01#; -- Interrupt Request Bits
+	constant mmu_sr    : natural := 16#02#; -- Status Register
+	constant mmu_i2cMR : natural := 16#03#; -- I2C Most Recent Eight Bits
+
+-- MMU Write Registers, Group One.
+	constant mmu_irst  : natural := 16#11#; -- Interrupt Reset Bits
+	constant mmu_sacc  : natural := 16#12#; -- Sample Accumulator Control
+	constant mmu_cmp   : natural := 16#14#; -- Command Memory Portal (Read/Write)
+	constant mmu_saddr : natural := 16#18#; -- Sample Memory Address
+
+-- MMU Write Registers, Group Two.
+	constant mmu_shift : natural := 16#21#; -- ADC Shift
+	constant mmu_xch   : natural := 16#22#; -- Transmit Channel Number
+	constant mmu_rfc   : natural := 16#24#; -- Radio Frequency Calibration
+	constant mmu_fck   : natural := 16#28#; -- Fast Clock Mask
+
+-- MMU Write Registers, Group Three.
+	constant mmu_dfr   : natural := 16#41#; -- Diagnostic Flags
+	constant mmu_rst   : natural := 16#42#; -- Software Reset
+
+-- MMU I2C Write Registers.
+	constant mmu_i2c00 : natural := 16#80#; -- SDA=0 SCL=0
+	constant mmu_i2c01 : natural := 16#81#; -- SDA=0 SCL=1
+	constant mmu_i2cA0 : natural := 16#82#; -- SDA=A SCL=0
+	constant mmu_i2cA1 : natural := 16#83#; -- SDA=A SCL=1
+	constant mmu_i2cZ0 : natural := 16#84#; -- SDA=Z SCL=0
+	constant mmu_i2cZ1 : natural := 16#85#; -- SDA=Z SCL=1
+
 -- Microcontroller Flags, Buses, and Registers
 	subtype mcu_addr_type is std_logic_vector(mcu_addr_len-1 downto 0);
 	subtype mcu_instr_type is std_logic_vector(mcu_instr_len-1 downto 0);
@@ -361,18 +360,18 @@ begin
 -- 1024 Hz. In states zero and one, it does nothing, so as to make 
 -- sure that the dispatch processes initiated in the previous cycle 
 -- have completed their work. In state two, it calls the Sensor
--- Reader process, which is provided by the Software Dispatcher.-- In states sixteen to thirty-one the manager picks one of the 
+-- Reader process, which is provided by the Software Dispatcher.-- In states sixteen to thirty-one the scheduler picks one of the 
 -- sixteen states at random in which to call the Telemetry 
 -- Dispatcher, which is also provided by the Software Dispatcher.
 -- The dispatcher's operations may take up to three RCK cycles to 
 -- complete, so if the dispatcher is called in state thirty-one, 
--- its operations may not complete until the manager is in state 
--- one. This overlap into state one is why the manager does nothing-- in states zero and one. 
+-- its operations may not complete until the scheduler is in state 
+-- one. This overlap into state one is why the scheduler does nothing-- in states zero and one. 
 --
 -- During the acquisition states two to fifteen, the Sensor Reader 
 -- updates the sample memory as required by the telemetry protocol. 
 -- The scheduler and reader cooperate through the use of two signals 
--- SRRQ and SRACK. The manager toggles SRRQ to start the reader. 
+-- SRRQ and SRACK. The scheduler toggles SRRQ to start the reader. 
 -- The SRRQ and SRACK signals will now be unequal, and this inequality
 -- starts FCK, which in turn starts the PCK clock that the Software
 -- Dispatcher runs on. The FCK signal will go HI. On a subsequent 
@@ -389,11 +388,15 @@ begin
 -- Telemetry Dispatcher, which is provided by the Software Dispatcher. 
 -- These zhift bits are randomized by the ADC Reader acquisition process 
 -- using the least significant bits of ADC samples. The dispatcher runs 
--- off the falling edge of PCK and interacts with the manager in the same-- way as do acquisition processes: with a request and acknowledge toggle 
+-- off the falling edge of PCK and interacts with the scheduler in the same-- way as do acquisition processes: with a request and acknowledge toggle 
 -- handshake.
 --
--- Another service the scheduler provides is to generate the Millisecond
--- Clock (MCK), which runs at 1024 Hz.
+-- The scheduler provides the Millisecond Clock (MCK), which runs at 
+-- 1024 Hz and is used by the Command Processor for delays.
+--
+-- The scheduler sets the ADCCAL flag upon RESET and clears it after the
+-- first completion of the Sensor Reader. The calibration is effective 
+-- only after power-up.
 	Telemetry_Scheduler : process (all) is
 		constant cycle_len : positive := 32;
 		variable state, next_state : natural range 0 to cycle_len-1;
@@ -463,8 +466,8 @@ begin
 		Reset => SDRSTACC
 	);
 
--- The ADC Reader is an acquisition process called by the Telemetry 
--- Manager. It runs off the falling edge of PCK. It starts up when-- it seesl ADCRQ xor ADCACK. When the ADCCAL flag is set, the reader
+-- The ADC Reader is an acquisition process called by the Sensor 
+-- Reader. It runs off the falling edge of PCK. It starts up when-- it seesl ADCRQ xor ADCACK. When the ADCCAL flag is set, the reader
 -- performs an extra-long read that initiates the ADC self-calibration
 -- provided that this is the first ADC read after power-up. At all other
 -- times, the reader performs a fourteen-bit sample read. To prepare for
@@ -618,7 +621,7 @@ begin
 		);
 	
 -- The Software Dispatcher is a microcontroller that performs several
--- tasks in response to flags set by the Telemetry Manager, Command
+-- tasks in response to flags set by the Telemetry Manger, Command
 -- Receiver, and Power-Up processes. We instantiate an RMC5
 -- microcontroller, but we don't use all its port signals, and
 -- so obtain some reduction in its size. We do not drive its Interrupt
@@ -648,13 +651,11 @@ begin
 -- Software Dispatcher Memory Management Unit.
 	Dispatcher_MMU : process (all) is 
 		variable full_addr : natural range 0 to (2**mcu_addr_len)-1;
-		variable low_addr : natural range 0 to (2**mmu_ctrl_len)-1;
 
 	begin
 		-- These signals develop after the CPU asserts a new address. 
 		-- They will be ready before the falling edge of the CK.
 		full_addr := to_integer(unsigned(mcu_addr));
-		low_addr := to_integer(unsigned(mcu_addr(mmu_ctrl_len-1 downto 0)));
 		
 		-- By default, don't write to RAM.
 		RAMWR <= '0';
@@ -669,17 +670,18 @@ begin
 			mcu_data_in <= ram_data;
 			RAMWR <= to_std_logic(WDS);
 		when mmu_ctrl_bot to mmu_ctrl_top =>
-			case low_addr is
-			when mmu_sr =>
-				mcu_data_in(6) <= CME;
-			when mmu_irqb =>
+			case mcu_addr(1 downto 0) is
+			when "00" =>
+				mcu_data_in <= cmd_out;
+			when "01" =>
 				mcu_data_in(0) <= to_std_logic(TDRQ xor TDACK);
 				mcu_data_in(1) <= to_std_logic(CMDRQ xor CMDACK);
 				mcu_data_in(2) <= to_std_logic(PURQ xor PUACK);
 				mcu_data_in(3) <= to_std_logic(SRRQ xor SRACK);
-			when mmu_cmp =>
-				mcu_data_in <= cmd_out;
-			when mmu_i2cMR => 
+				mcu_data_in(4) <= to_std_logic(ADCRQ xor ADCACK);
+			when "10" =>
+				mcu_data_in(6) <= CME;
+			when "11" =>
 				mcu_data_in <= i2c_in;
 			when others =>
 				null;
@@ -706,6 +708,8 @@ begin
 			SDBIT <= '0';
 			CMRD <= '0';
 			adc_shift <= 4;
+			SDA <= 'Z';
+			SCL <= '1';
 			rf_calib <= default_rf_calib;
 			fck_mask <= default_fck_mask;
 			SWRST <= false;
@@ -719,77 +723,86 @@ begin
 			CMRD <= '0';
 			if (full_addr >= mmu_ctrl_bot) and (full_addr <= mmu_ctrl_top) then
 				if WDS then
-					case low_addr is
-					when mmu_irst =>
-						if (mcu_data_out(0) = '1') then
-							TDACK <= TDRQ;
-						end if;
-						if (mcu_data_out(1) = '1') then
-							CMDACK <= CMDRQ;
-						end if;
-						if (mcu_data_out(2) = '1') then
-							PUACK <= PURQ;
-						end if;
-						if (mcu_data_out(3) = '1') then
-							SRACK <= SRRQ;
-						end if;
-						if (mcu_data_out(4) = '1') then
-							ADCRQ <= not ADCRQ;
-						end if;
-					when mmu_dfr => 
-						df_reg <= mcu_data_out(3 downto 0);
-					when mmu_cmp => 
-						CMRD <= '1';
-					when mmu_fck =>
-						fck_mask <= mcu_data_out;
-					when mmu_rfc =>
-						rf_calib <= to_integer(unsigned(mcu_data_out(4 downto 0)));
-					when mmu_xch =>
-						td_chan <= to_integer(unsigned(mcu_data_out));
-						TXI <= true;
-					when mmu_rst =>
-						SWRST <= true;
-					when mmu_saddr =>
-						sd_addr <= mcu_data_out(smem_addr_len-1 downto 0);
-					when mmu_sacc =>
-						SDRSTACC <= mcu_data_out(0);					
-						SDWRSM <= mcu_data_out(1);
-						SDSHSD <= (mcu_data_out(2) = '1');
-						SDADD <= mcu_data_out(3);
-						SDBIT <= mcu_data_out(4);
-					when mmu_i2c00 => 
-						SDA <= '0';
-						SCL <= '0';
-					when mmu_i2c01 =>
-						SDA <= '0';
-						SCL <= '1';
-					when mmu_i2cA0 => 
-						if (mcu_data_out(7) = '0') then
-							SDA <= '0';
-						else
+					if (mcu_addr(7) = '1') then
+						-- I2C Control.
+						SCL <= mcu_addr(0);
+
+						if (mcu_addr(2) = '1')
+							or ((mcu_addr(1) = '1')
+							and (mcu_data_out(7) = '1')) then
 							SDA <= 'Z';
-						end if;
-						SCL <= '0';
-					when mmu_i2cA1 =>
-						if (mcu_data_out(7) = '0') then
-							SDA <= '0';
 						else
-							SDA <= 'Z';
+							SDA <= '0';
 						end if;
-						SCL <= '1';
-					when mmu_i2cZ0 => 
-						SDA <= 'Z';
-						SCL <= '0';
-					when mmu_i2cZ1 => 
-						SDA <= 'Z';
-						SCL <= '1';
-						i2c_in(7 downto 1) <= i2c_in(6 downto 0);
-						i2c_in(0) <= SDA;
-					when mmu_shift =>
-						adc_shift <= to_integer(unsigned(mcu_data_out(2 downto 0)));
-					when others => 
-						null;
-					end case;
+
+						if (mcu_addr(2) = '1')
+							and (mcu_addr(0) = '1') then
+							i2c_in(7 downto 1) <= i2c_in(6 downto 0);
+							i2c_in(0) <= SDA;
+						end if;
+
+					else
+						-- Register Group One.
+						if (mcu_addr(4) = '1') then
+							if (mcu_addr(0) = '1') then
+								if (mcu_data_out(0) = '1') then
+									TDACK <= TDRQ;
+								end if;
+								if (mcu_data_out(1) = '1') then
+									CMDACK <= CMDRQ;
+								end if;
+								if (mcu_data_out(2) = '1') then
+									PUACK <= PURQ;
+								end if;
+								if (mcu_data_out(3) = '1') then
+									SRACK <= SRRQ;
+								end if;
+								if (mcu_data_out(4) = '1') then
+									ADCRQ <= not ADCRQ;
+								end if;
+							end if;
+							if (mcu_addr(1) = '1') then
+								SDRSTACC <= mcu_data_out(0);					
+								SDWRSM <= mcu_data_out(1);
+								SDSHSD <= (mcu_data_out(2) = '1');
+								SDADD <= mcu_data_out(3);
+								SDBIT <= mcu_data_out(4);
+							end if;
+							if (mcu_addr(2) = '1') then
+								CMRD <= '1';
+							end if;
+							if (mcu_addr(3) = '1') then
+								sd_addr <= mcu_data_out(smem_addr_len-1 downto 0);
+							end if;
+						end if;
+
+						-- Register Group Two.
+						if (mcu_addr(5) = '1') then
+							if (mcu_addr(0) = '1') then
+								adc_shift <= to_integer(unsigned(mcu_data_out(2 downto 0)));
+							end if;
+							if (mcu_addr(1) = '1') then
+								td_chan <= to_integer(unsigned(mcu_data_out));
+								TXI <= true;
+							end if;
+							if (mcu_addr(2) = '1') then
+								rf_calib <= to_integer(unsigned(mcu_data_out(4 downto 0)));
+							end if;
+							if (mcu_addr(3) = '1') then
+								fck_mask <= mcu_data_out;
+							end if;
+						end if;
+
+						-- Register Group Three.
+						if (mcu_addr(6) = '1') then
+							if (mcu_addr(0) = '1') then
+								df_reg <= mcu_data_out(3 downto 0);
+							end if;
+							if (mcu_addr(1) = '1') then
+								SWRST <= true;
+							end if;
+						end if;
+					end if;
 				end if;
 			end if;
 		end if;
