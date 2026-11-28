@@ -179,9 +179,15 @@ architecture behavior of main is
 	constant mmu_ctrl_top  : natural := 16#02FF#;
 	constant mmu_cmd_bot   : natural := 16#0300#;
 	constant mmu_cmd_top   : natural := 16#03FF#;
-	constant mmu_ctrl_len  : positive := 5; -- Register Address Length
 	constant mmu_ram_len   : positive := 5; -- Process RAM Address Length
 	
+-- Control register addresses are partially decoded. Read access
+-- is selected by address bits 1 and 0. Write access with bit 7
+-- set controls the I2C interface. Otherwise, bits 6 to 4 select
+-- register groups and bits 3 to 0 select registers within each
+-- group. Use the canonical addresses below to avoid unintended
+-- simultaneous writes to multiple registers.
+
 -- MMU Read Registers.
 	constant mmu_irqb  : natural := 16#01#; -- Interrupt Request Bits
 	constant mmu_sr    : natural := 16#02#; -- Status Register
