@@ -53,7 +53,9 @@
 -- Make all connections necessary for the dispatcher to interpret
 -- commands. All I2C connections to dispatcher in place. Fast 
 -- clock enabling set up. Size is 619 LUTs and 2 EBR. Maximum
--- FCK speed 54 MHz, TCK 27 MHz.
+-- TCK speed 7.5 MHz for VCC = 1.14 V, which is like 4.5 MHz at
+-- our VCC = 1.02 V. We see zero-glitches in telemetry signals 
+-- after programming, when chip is warm, then they stop.
 
 
 library ieee;
