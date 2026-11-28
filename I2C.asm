@@ -1,15 +1,13 @@
-; I2C library for RMC5, FCK = 5 MHz.
+; I2C library for RMC5, PCK = 2.5 MHz.
 ; Public transactions preserve A, F, reg_C, reg_E, reg_H, reg_L.
 ; IX advances by the number of bytes. C=0 means 256 bytes.
 ; Non-reentrant. Identity ROM supplies constants.
 
-; START or repeated START. Enter with SDA released, SCL low or high.
+; START or repeated START.
 i2c_start:
 ld (mmu_i2cZ1),A
 nop
-nop
 ld (mmu_i2c01),A
-nop
 nop
 ld (mmu_i2c00),A
 ret
@@ -20,47 +18,34 @@ ld (mmu_i2c00),A
 nop
 nop
 nop
-nop
-nop
-nop
 ld (mmu_i2c01),A
-nop
 nop
 ld (mmu_i2cZ1),A
 ret
 
-; Slave ACK (unchecked) or master NACK. SDA released.
+; Slave ACK (unchecked) or master NACK.
 i2c_nack:
 ld (mmu_i2cZ0),A
 nop
 nop
 nop
-nop
-nop
-nop
 ld (mmu_i2cZ1),A
-nop
 nop
 ld (mmu_i2cZ0),A
 ret
 
-; Master ACK. SDA driven low during pulse.
+; Master ACK.
 i2c_ack:
 ld (mmu_i2c00),A
 nop
 nop
 nop
-nop
-nop
-nop
 ld (mmu_i2c01),A
-nop
 nop
 ld (mmu_i2cZ0),A
 ret
 
 ; Transmit A, MSB first, then accept slave ACK.
-; Clobbers A, arithmetic flags, reg_E.
 i2c_tx_byte:
 push A
 ld A,(8)
@@ -69,7 +54,6 @@ pop A
 i2c_tx_bit:
 ld (mmu_i2cA0),A
 ld (mmu_i2cA1),A
-nop
 nop
 ld (mmu_i2cA0),A
 rl A
@@ -81,18 +65,13 @@ pop A
 jp nz,i2c_tx_bit
 jp i2c_nack
 
-; Receive eight bits into A. Caller sends ACK or NACK.
-; Clobbers arithmetic flags, preserves reg_E.
+; Receive eight bits into A.
 i2c_rx_byte:
 ld A,(8)
 i2c_rx_bit:
 ld (mmu_i2cZ0),A
 nop
-nop
-nop
-nop
 ld (mmu_i2cZ1),A
-nop
 nop
 ld (mmu_i2cZ0),A
 sub A,(1)

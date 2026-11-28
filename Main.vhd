@@ -87,43 +87,12 @@ entity main is
 		: inout std_logic;
 		xdac -- Transmit DAC Output, to set data transmit frequency
 		: out std_logic_vector(4 downto 0));
-		
--- Identifier.
-	subtype device_id_type is std_logic_vector(15 downto 0);
-	constant device_id : device_id_type := x"AA55";
-	constant wildcard_id : device_id_type := x"FFFF";
--- Configuration of the Ring Oscillator
+	
+	-- Calibration Constants
+	constant default_rf_calib : natural := 6;
 	constant fck_num_feeds : natural := 8;
-	constant fck_num_gates : natural := 26;
 	subtype fck_mask_type is std_logic_vector(fck_num_feeds-1 downto 0);
-	constant default_fck_mask : fck_mask_type :=x"10";
-	constant fck_i2c_div : natural := 5;
-
--- Configuration and Calibration of Transmitter.
-	constant frequency_step : positive := 1; 
-	constant frequency_low : natural := 6;
-	
--- Configuration of the Telemetry Manager
-	constant TMRUN : boolean := true; -- Run the Telemetry Protocol
-	constant tx_period : natural := 4; -- Shortest Period of All Signals
-	
--- Sample and Accumulate Constants
-	constant smem_addr_len : positive := 4;
-	subtype smem_addr_type is std_logic_vector(smem_addr_len-1 downto 0);
-	constant x1_addr : smem_addr_type := "0000";
-	constant x2_addr : smem_addr_type := "0001";
-	constant x3_addr : smem_addr_type := "0010";
-	constant x4_addr : smem_addr_type := "0011";
-	constant tp_addr : smem_addr_type := "0100";
-	constant x1_pd : natural range 0 to 16 := 1;
-	constant x2_pd : natural range 0 to 16 := 2;
-	constant x3_pd : natural range 0 to 16 := 4;
-	constant x4_pd : natural range 0 to 16 := 8;
-	constant tp_pd : natural range 0 to 16 := 16;
-	constant x1_shift : natural range 0 to 7 := 4;
-	constant x2_shift : natural range 0 to 7 := 3;
-	constant x3_shift : natural range 0 to 7 := 2;
-	constant x4_shift : natural range 0 to 7 := 1;
+	constant default_fck_mask : fck_mask_type := x"10";
 end;
 
 architecture behavior of main is
@@ -136,13 +105,16 @@ architecture behavior of main is
 	attribute syn_keep : boolean;
 	attribute nomerge : string;
 
--- Power Controller
+-- Power-Up Controller and RESET
 	signal USERSTDBY, CLRFLAG : std_logic := '0';
 	signal RESET : std_logic := '1';
 	attribute syn_keep of RESET : signal is true;
 	attribute nomerge of RESET : signal is "";
 	signal SFLAG, STDBY : std_logic;
 	signal SWRST : boolean := false;
+	
+-- Configuration and Calibration Signals
+	signal PURQ, PUACK : boolean := false;
 	
 -- Ring Oscillator, Fast Clock, and Transmit Clock. We want the 
 -- compiler to preserve the fck_mask bits or else FCK period will 
@@ -151,11 +123,30 @@ architecture behavior of main is
 -- the next if we preserve the control signals too.
 	signal TCK, FCK, PCK, MCK : std_logic;
 	signal FCKEN : boolean; 
-	signal fck_mask : fck_mask_type := default_fck_mask;
+	constant fck_num_gates : natural := 26;
+	signal fck_mask : fck_mask_type;
 	attribute syn_keep of TCK, FCK, PCK, MCK, FCKEN, fck_mask : signal is true;
 	attribute nomerge of TCK, FCK, PCK, MCK, FCKEN, fck_mask : signal is ""; 
 
 -- Sample Memory and Accumulator
+-- Configuration of the Telemetry Manager
+	constant TMRUN : boolean := true; -- Run the Telemetry Protocol
+	
+-- Sample Memory Locations
+	constant smem_addr_len : positive := 4;
+	subtype smem_addr_type is std_logic_vector(smem_addr_len-1 downto 0);
+	constant x1_addr   : smem_addr_type := "0000";
+	constant x2_addr   : smem_addr_type := "0001";
+	constant x3_addr   : smem_addr_type := "0010";
+	constant x4_addr   : smem_addr_type := "0011";
+	constant temp_addr : smem_addr_type := "0100";
+	constant accx_addr : smem_addr_type := "0101";
+	constant accy_addr : smem_addr_type := "0110";
+	constant accz_addr : smem_addr_type := "0111";
+	constant ack_addr  : smem_addr_type := "1000";
+	constant conf_addr : smem_addr_type := "1001";
+
+-- Sample Memory Signals
 	subtype smem_data_type is std_logic_vector(17 downto 0);
 	signal smem_data : smem_data_type; -- Sample Memory Output
 	signal acc_data : smem_data_type; -- Accumulator Output
@@ -167,6 +158,8 @@ architecture behavior of main is
 	signal adc_shift : natural range 0 to 4; -- ADC sample left shift.
 	subtype transmit_shift_type is std_logic_vector(3 downto 0);
 	signal transmit_shift : transmit_shift_Type;
+	signal X1EN, X2EN, X3EN, X4EN : boolean;
+	signal x1_shift, x2_shift, x3_shift, x4_shift : natural range 0 to 7;
 		
 -- ADC Reader
 	signal ADCCAL, -- Calibrate the Selected ADC
@@ -239,12 +232,15 @@ architecture behavior of main is
 	signal df_reg : nibble_type;
 
 -- Software Dispatcher.
-	signal TDWRSM, -- Telemetry Dispatcher Write to Sample Memory
-		TDRSTACC -- Telemetry Dispatcher Resets Accumulator
+	signal SMWRSM, -- Telemetry Dispatcher Write to Sample Memory
+		SMRSTACC -- Telemetry Dispatcher Resets Accumulator
 		: std_logic;
 	signal TDRQ, -- Telemetry Dispatcher Request
 		TDACK, -- Telemetry Dispatcher Acknowledge
-		TDBSY -- Telemetry Dispatcher Busy
+		SMBSY, -- Telemetry Dispatcher Busy
+		SRRQ, -- Sensor Reader Request
+		SRACK, -- Sensor Reader Acknowledge
+		SRBSY -- Sensor Reader Busy
 		: boolean := false;
 	signal sd_addr : smem_addr_type; -- Software Dispatcher Sample Select
 
@@ -260,6 +256,8 @@ architecture behavior of main is
 	attribute nomerge of TXI, TXA : signal is "";  
 	constant max_chan_num : positive := 255;
 	signal td_chan : natural range 0 to max_chan_num;
+	constant frequency_step : positive := 1; 
+	signal rf_calib : natural range 0 to 31;
 
 -- I2C Bus Controller
 	signal i2c_in : std_logic_vector(7 downto 0); -- I2C Serial Byte
@@ -317,7 +315,7 @@ begin
 -- and RESET set HI. When RCK starts up, we use the falling edge to move the 
 -- chip into standby mode, then unassert RESET once we receive SFLAG from the
 -- Power Control Unit (PCU).
-	PowerUp: process (all) is
+	Power_Up : process (all) is
 		constant end_state : natural := 7;
 		constant clr_state : natural := 3;
 		constant stdby_state : natural := clr_state + 2;
@@ -335,18 +333,31 @@ begin
 			elsif (state < end_state) then state := state + 1; 
 			else state := end_state; end if;
 		end if;
-	end process;	
+	end process;
+
+-- Power-Up Flag. This flag we set upon reset and it causes the
+-- Software Dispatcher to read calibration and configuration 
+-- records from the NVM.
+	Configure : process (all) is
+	begin
+		if (RESET = '1') then
+			PURQ <= true;
+		end if;
+	end process;
+
 
 -- The Fast Clock entity produces FCK. The ring oscillator should be 
 -- calibrated so that it produces FCK of 10 MHz. The Fast Clock is
 -- enabled whenever the request and acknowledgment signals of one of
 -- our acquisition or dispatch processes are not equal.
-	FCKEN <= (ADCRQ xor ADCACK) or (TDRQ xor TDACK) or (CMDRQ xor CMDACK);
+	FCKEN <= (ADCRQ xor ADCACK) or (TDRQ xor TDACK) 
+		or (CMDRQ xor CMDACK) or (PURQ xor PUACK)
+		or (SRRQ xor SRACK);
 	Fast_Clock : entity ring_oscillator 
 		generic map (
 			num_gates => fck_num_gates,
 			num_feeds => fck_num_feeds
-		)	
+		)
 		port map (
 			ENABLE => FCKEN, 
 			mask => fck_mask,
@@ -419,6 +430,7 @@ begin
 			state := 0;
 			adc_shift <= 0;
 			tm_addr <= (others => '0');
+			SRRQ <= false;
 		elsif rising_edge(RCK) then
 			next_state := (state + 1) mod cycle_len;
 
@@ -426,28 +438,29 @@ begin
 				if (state = 2) then
 					tm_addr <= x1_addr;
 					adc_shift <= x1_shift;
-					if (x1_pd /= 0) then 
+					if X1EN then 
 						ADCRQ <= not ADCRQ;
 					end if;
 				elsif (state = 3) then
 					tm_addr <= x2_addr;
 					adc_shift <= x2_shift;
-					if (x2_pd /= 0) then 
+					if X2EN then 
 						ADCRQ <= not ADCRQ;
 					end if;
 				elsif (state = 4) then
 					tm_addr <= x3_addr;
 					adc_shift <= x3_shift;
-					if (x3_pd /= 0) then 
+					if X3EN then 
 						ADCRQ <= not ADCRQ;
 					end if;
 				elsif (state = 5) then
 					tm_addr <= x4_addr;
 					adc_shift <= x4_shift;
-					if (x4_pd /= 0) then 
+					if X4EN then 
 						ADCRQ <= not ADCRQ;
 					end if;
 				elsif (state = 6) then
+					SRRQ <= not SRRQ;
 					ADCCAL <= false;
 				elsif (state = to_integer(unsigned(transmit_shift))+16) then
 					TDRQ <= not TDRQ;
@@ -472,7 +485,7 @@ begin
 	Sample_Memory : entity SMRAM port map (
 		Clock => not FCK,
 		ClockEn => '1',
- 		WE => ADCWRSM or TDWRSM,
+ 		WE => ADCWRSM or SMWRSM,
 		Address => smem_addr, 
 		Data => acc_data,
 		Q => smem_data);
@@ -497,7 +510,7 @@ begin
 -- Sample Memory. The Telemetry Dispatcher takes priority.
 	Sample_Addr_Mux : process (all) is 
 	begin
-		if TDBSY then
+		if SMBSY then
 			smem_addr <= sd_addr;
 		else
 			smem_addr <= tm_addr;
@@ -513,7 +526,7 @@ begin
 		Result => acc_data,
 		Clock => not FCK,
 		ClockEn => ADCADD,
-		Reset => TDRSTACC
+		Reset => SMRSTACC
 	);
 
 -- The ADC Reader is an acquisition process called by the Telemetry 
@@ -651,7 +664,7 @@ begin
 -- microcontroller clock.
 	Dispatcher_ROM : entity ROM
 		port map (
-			Address => prog_cntr(8 downto 0),
+			Address => prog_cntr(mcu_addr_len-2 downto 0),
 			OutClock => not PCK,
 			OutClockEn => '1',
 			Reset => '0',
@@ -677,7 +690,7 @@ begin
 -- so obtain some reduction in its size. We do not drive its Interrupt
 -- Request (IRQ) or Clock Enable (CKEN) inputs. We do not use its 
 -- Interrupt Service (ISRV) or Read Data Strobe (RDS) outputs. The
--- MCU runs of the Processor Clock (TCK), which is one quarter the 
+-- MCU runs of the Processor Clock (PCK), which is one quarter the 
 -- Fast Clock (FCK). Because PCK runs off the falling edges of FCK, 
 -- a PCK rising edge will occur just after an FCK falling edge.
 	Software_Dispatcher : entity RMC5_MCU
@@ -728,6 +741,8 @@ begin
 			when mmu_irqb =>
 				mcu_data_in(0) <= to_std_logic(TDRQ xor TDACK);
 				mcu_data_in(1) <= to_std_logic(CMDRQ xor CMDACK);
+				mcu_data_in(2) <= to_std_logic(PURQ xor PUACK);
+				mcu_data_in(3) <= to_std_logic(SRRQ xor SRACK);
 			when mmu_cmp =>
 				mcu_data_in <= cmd_out;
 			when mmu_i2cMR => 
@@ -750,16 +765,27 @@ begin
 			df_reg <= (others => '0');
 			TXI <= false;
 			TDACK <= false;
-			TDBSY <= false;
-			TDWRSM <= '0';
-			TDRSTACC <= '0';
+			SMBSY <= false;
+			SMWRSM <= '0';
+			SMRSTACC <= '0';
 			CMDACK <= false;
 			CMRD <= '0';
+			PUACK <= false;
+			x1_shift <= 4;
+			X1EN <= true;
+			x2_shift <= 4;
+			X2EN <= true;
+			x3_shift <= 4;
+			X3EN <= true;
+			x4_shift <= 4;
+			X4EN <= true;
+			rf_calib <= default_rf_calib;
+			fck_mask <= default_fck_mask;
 		elsif rising_edge(PCK) then
 			SWRST <= false;
 			TXI <= false;
-			TDWRSM <= '0';
-			TDRSTACC <= '0';
+			SMWRSM <= '0';
+			SMRSTACC <= '0';
 			CMRD <= '0';
 			if (full_addr >= mmu_ctrl_bot) and (full_addr <= mmu_ctrl_top) then
 				if WDS then
@@ -771,19 +797,31 @@ begin
 						if (mcu_data_out(1) = '1') then
 							CMDACK <= CMDRQ;
 						end if;
+						if (mcu_data_out(2) = '1') then
+							PUACK <= PURQ;
+						end if;
+						if (mcu_data_out(2) = '1') then
+							SRACK <= SRRQ;
+						end if;
 					when mmu_dfr => 
 						df_reg <= mcu_data_out(3 downto 0);
 					when mmu_cmp => 
 						CMRD <= '1';
+					when mmu_fck =>
+						fck_mask <= mcu_data_out;
+					when mmu_rfc =>
+						rf_calib <= to_integer(unsigned(mcu_data_out(4 downto 0)));
 					when mmu_xch =>
 						td_chan <= to_integer(unsigned(mcu_data_out));
 						TXI <= true;
+					when mmu_rst =>
+						SWRST <= true;
 					when mmu_saddr =>
 						sd_addr <= mcu_data_out(smem_addr_len-1 downto 0);
 					when mmu_sacc =>
-						TDRSTACC <= mcu_data_out(0);					
-						TDWRSM <= mcu_data_out(1);
-						TDBSY <= (mcu_data_out(2) = '1');
+						SMRSTACC <= mcu_data_out(0);					
+						SMWRSM <= mcu_data_out(1);
+						SMBSY <= (mcu_data_out(2) = '1');
 					when mmu_i2c00 => 
 						SDA <= '0';
 						SCL <= '0';
@@ -812,6 +850,18 @@ begin
 						SCL <= '1';
 						i2c_in(7 downto 1) <= i2c_in(6 downto 0);
 						i2c_in(0) <= SDA;
+					when mmu_x1cfg =>
+						x1_shift <= to_integer(unsigned(mcu_data_out(2 downto 0)));
+						X1EN <= (mcu_data_out(3) = '1');
+					when mmu_x2cfg =>
+						x2_shift <= to_integer(unsigned(mcu_data_out(2 downto 0)));
+						X2EN <= (mcu_data_out(3) = '1');
+					when mmu_x3cfg =>
+						x3_shift <= to_integer(unsigned(mcu_data_out(2 downto 0)));
+						X3EN <= (mcu_data_out(3) = '1');
+					when mmu_x4cfg =>
+						x4_shift <= to_integer(unsigned(mcu_data_out(2 downto 0)));
+						X4EN <= (mcu_data_out(3) = '1');
 					when others => 
 						null;
 					end case;
@@ -948,11 +998,11 @@ begin
 			-- TCK.
 			elsif (TXB xor (TCK = '1')) then
 				xdac <= std_logic_vector(to_unsigned(
-					frequency_low + frequency_step,5));
+					rf_calib + frequency_step,5));
 				FHI <= true;
 			else
 				xdac <= std_logic_vector(to_unsigned(
-					frequency_low,5));
+					rf_calib,5));
 				FHI <= false;
 			end if;
 		end if;
